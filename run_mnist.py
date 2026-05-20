@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,8 +11,29 @@ from torch.utils.data import DataLoader
 
 from IPython.display import Image, display, clear_output
 
-# Pour être sûr que Python trouve src.losses et src.models
-sys.path.append("/kaggle/working/SWOT-Flow")
+
+# ============================================================
+# Clonage / chemin du projet
+# ============================================================
+
+PROJECT_DIR = "/kaggle/working/transport"
+
+if not os.path.exists(PROJECT_DIR):
+    print("Clonage du projet...")
+    subprocess.run(
+        ["git", "clone", "https://github.com/hamzasou/transport.git", PROJECT_DIR],
+        check=True
+    )
+else:
+    print("Le projet existe déjà :", PROJECT_DIR)
+
+src_path = os.path.join(PROJECT_DIR, "src")
+
+if os.path.exists(src_path):
+    sys.path.append(PROJECT_DIR)
+    print("Chemin ajouté :", PROJECT_DIR)
+else:
+    raise FileNotFoundError("Le dossier src est introuvable. Vérifie le dépôt GitHub.")
 
 from src.losses import sliced_wasserstein_distance
 from src.models import SWFlowModel
@@ -29,6 +51,20 @@ os.makedirs(OUTDIR, exist_ok=True)
 
 
 # ============================================================
+# Vérification GPU
+# ============================================================
+
+print("Version PyTorch :", torch.__version__)
+print("CUDA disponible :", torch.cuda.is_available())
+
+if torch.cuda.is_available():
+    print("Nombre de GPU :", torch.cuda.device_count())
+    print("Nom du GPU :", torch.cuda.get_device_name(0))
+else:
+    print("Aucun GPU détecté. Active GPU dans Kaggle.")
+
+
+# ============================================================
 # Affichage notebook Kaggle
 # ============================================================
 
@@ -41,7 +77,7 @@ def display_image(path):
 # ============================================================
 
 class MLP(nn.Module):
-    def __init__(self, in_dim, out_dim, hidden_dim=512):
+    def __init__(self, in_dim, out_dim, hidden_dim=256):
         super().__init__()
 
         self.net = nn.Sequential(
@@ -63,7 +99,7 @@ class MLP(nn.Module):
 # ============================================================
 
 class StableRealNVP(nn.Module):
-    def __init__(self, dim=784, hidden_dim=512):
+    def __init__(self, dim=784, hidden_dim=256):
         super().__init__()
 
         self.dim = dim
@@ -79,12 +115,10 @@ class StableRealNVP(nn.Module):
         lower = x[:, :self.dim // 2]
         upper = x[:, self.dim // 2:]
 
-        # Transformation de upper selon lower
         s1 = 1.5 * torch.tanh(self.s1(lower))
         t1 = self.t1(lower)
         upper = upper * torch.exp(s1) + t1
 
-        # Transformation de lower selon upper
         s2 = 1.5 * torch.tanh(self.s2(upper))
         t2 = self.t2(upper)
         lower = lower * torch.exp(s2) + t2
@@ -128,7 +162,6 @@ def save_generated_images(model, device, epoch, fixed_noise, outdir=OUTDIR, disp
 
         generated = generated.view(fixed_noise.size(0), 1, 28, 28)
 
-        # [-1, 1] -> [0, 1]
         generated = (generated + 1) / 2
         generated = torch.clamp(generated, 0, 1)
 
@@ -173,7 +206,6 @@ def save_comparison_images(
         generated, _, _ = model(fixed_noise)
         generated = generated.view(n, 1, 28, 28)
 
-        # [-1, 1] -> [0, 1]
         real_images = (real_images + 1) / 2
         generated = (generated + 1) / 2
 
@@ -229,7 +261,7 @@ def save_loss_curve(loss_history, sw_history, epoch, outdir=OUTDIR, display_resu
 
 
 # ============================================================
-# Sauvegarde checkpoint Kaggle
+# Sauvegarde checkpoint
 # ============================================================
 
 def save_checkpoint(
@@ -280,37 +312,34 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device utilisé :", device)
 
-    # -----------------------------
+    # ========================================================
     # Hyperparamètres
-    # -----------------------------
+    # ========================================================
 
-    batch_size = 256
-    epochs = 50
+    batch_size = 128
+    epochs = 100
 
     dim = 28 * 28
-    nb_flows = 6
-    hidden_dim = 512
+    nb_flows = 4
+    hidden_dim = 256
 
     lr = 1e-4
-    num_projections = 500
+    num_projections = 200
 
     lamb = 1e-6
     gamma = 1e-6
 
-    display_every = 5
-    checkpoint_every = 5
+    display_every = 10
+    checkpoint_every = 10
 
-    # Mettre True seulement pour reprendre un entraînement
     RESUME = False
-
-    # Pour reprendre depuis un ancien output Kaggle, changer ce chemin
     RESUME_CHECKPOINT_PATH = "/kaggle/input/ton-output/latest_checkpoint.pth"
 
     fixed_noise = torch.randn(64, dim).to(device)
 
-    # -----------------------------
+    # ========================================================
     # Dataset MNIST
-    # -----------------------------
+    # ========================================================
 
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -333,9 +362,9 @@ def main():
         pin_memory=True if torch.cuda.is_available() else False
     )
 
-    # -----------------------------
+    # ========================================================
     # Modèle SWOT-Flow
-    # -----------------------------
+    # ========================================================
 
     flows = [
         StableRealNVP(dim=dim, hidden_dim=hidden_dim)
@@ -344,15 +373,19 @@ def main():
 
     model = SWFlowModel(flows, device).to(device)
 
+    # Vérification du nombre de paramètres entraînables
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print("Nombre de paramètres entraînables :", total_params)
+
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     start_epoch = 1
     loss_history = []
     sw_history = []
 
-    # -----------------------------
+    # ========================================================
     # Reprendre un entraînement
-    # -----------------------------
+    # ========================================================
 
     if RESUME:
         model, optimizer, start_epoch, loss_history, sw_history = load_checkpoint(
@@ -364,27 +397,40 @@ def main():
 
     print("Start MNIST SWOT-Flow training")
     print("________________________________")
+    print("Hyperparamètres :")
+    print("batch_size =", batch_size)
+    print("epochs =", epochs)
+    print("dim =", dim)
+    print("nb_flows =", nb_flows)
+    print("hidden_dim =", hidden_dim)
+    print("lr =", lr)
+    print("num_projections =", num_projections)
+    print("lambda =", lamb)
+    print("gamma =", gamma)
+    print("________________________________")
 
     last_real_images = None
 
-    # -----------------------------
+    # ========================================================
     # Boucle d'entraînement
-    # -----------------------------
+    # ========================================================
 
     for epoch in range(start_epoch, epochs + 1):
 
         total_loss = 0.0
         total_sw = 0.0
+        total_cost = 0.0
+        total_reg = 0.0
 
         for images, _ in loader:
             images = images.to(device)
             last_real_images = images
 
-            # Cible : images MNIST aplaties
-            target = images.view(batch_size, dim)
+            current_batch_size = images.size(0)
 
-            # Source : bruit gaussien
-            source = torch.randn(batch_size, dim).to(device)
+            target = images.view(current_batch_size, -1)
+
+            source = torch.randn(current_batch_size, dim).to(device)
 
             optimizer.zero_grad()
 
@@ -398,18 +444,36 @@ def main():
                 device
             ).mean()
 
-            cost = torch.sum(model.transport_cost(source))
+            cost = model.transport_cost(source).mean()
 
-            loss = sw + lamb * cost + gamma * shatten
+            if torch.is_tensor(shatten):
+                shatten_reg = shatten.mean()
+            else:
+                shatten_reg = shatten
+
+            loss = sw + lamb * cost + gamma * shatten_reg
+
+            # Sécurité contre les NaN
+            if torch.isnan(loss):
+                print("NaN détecté, arrêt de l'entraînement")
+                return
 
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item()
             total_sw += sw.item()
+            total_cost += cost.item()
+
+            if torch.is_tensor(shatten_reg):
+                total_reg += shatten_reg.item()
+            else:
+                total_reg += float(shatten_reg)
 
         avg_loss = total_loss / len(loader)
         avg_sw = total_sw / len(loader)
+        avg_cost = total_cost / len(loader)
+        avg_reg = total_reg / len(loader)
 
         loss_history.append(avg_loss)
         sw_history.append(avg_sw)
@@ -417,12 +481,14 @@ def main():
         print(
             f"Epoch {epoch}/{epochs} | "
             f"SW: {avg_sw:.6f} | "
+            f"Cost: {avg_cost:.6f} | "
+            f"Reg: {avg_reg:.6f} | "
             f"Loss: {avg_loss:.6f}"
         )
 
-        # -----------------------------
+        # ====================================================
         # Sauvegarde latest checkpoint
-        # -----------------------------
+        # ====================================================
 
         latest_checkpoint_path = os.path.join(SAVE_DIR, "latest_checkpoint.pth")
 
@@ -435,9 +501,9 @@ def main():
             path=latest_checkpoint_path
         )
 
-        # -----------------------------
+        # ====================================================
         # Sauvegarde checkpoint par intervalle
-        # -----------------------------
+        # ====================================================
 
         if epoch % checkpoint_every == 0:
             checkpoint_path = os.path.join(SAVE_DIR, f"checkpoint_epoch_{epoch}.pth")
@@ -451,9 +517,9 @@ def main():
                 path=checkpoint_path
             )
 
-        # -----------------------------
+        # ====================================================
         # Affichage notebook Kaggle
-        # -----------------------------
+        # ====================================================
 
         if epoch % display_every == 0:
             clear_output(wait=True)
@@ -461,6 +527,8 @@ def main():
             print(
                 f"Epoch {epoch}/{epochs} | "
                 f"SW: {avg_sw:.6f} | "
+                f"Cost: {avg_cost:.6f} | "
+                f"Reg: {avg_reg:.6f} | "
                 f"Loss: {avg_loss:.6f}"
             )
 
@@ -491,9 +559,9 @@ def main():
                 display_result=True
             )
 
-    # -----------------------------
+    # ========================================================
     # Génération finale après entraînement
-    # -----------------------------
+    # ========================================================
 
     print("Génération finale après entraînement...")
 
@@ -524,9 +592,9 @@ def main():
         display_result=True
     )
 
-    # -----------------------------
+    # ========================================================
     # Sauvegarde finale du modèle
-    # -----------------------------
+    # ========================================================
 
     model_path = os.path.join(SAVE_DIR, "mnist_swot_flow.pth")
 
@@ -548,5 +616,8 @@ def main():
     print("Tous les résultats sont sauvegardés dans :", SAVE_DIR)
 
 
+# ============================================================
 # Lancer l'entraînement
+# ============================================================
+
 main()
