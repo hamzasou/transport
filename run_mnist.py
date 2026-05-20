@@ -13,6 +13,16 @@ from IPython.display import Image, display, clear_output
 
 
 # ============================================================
+# Seed pour reproductibilité
+# ============================================================
+
+torch.manual_seed(42)
+
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+
+
+# ============================================================
 # Clonage / chemin du projet
 # ============================================================
 
@@ -40,11 +50,11 @@ from src.models import SWFlowModel
 
 
 # ============================================================
-# Chemins Kaggle
+# Chemins Kaggle - nouvelle version
 # ============================================================
 
-SAVE_DIR = "/kaggle/working/mnist_swot_flow"
-OUTDIR = "/kaggle/working/mnist_swot_flow/mnist_results"
+SAVE_DIR = "/kaggle/working/mnist_swot_flow_v2_flows6"
+OUTDIR = "/kaggle/working/mnist_swot_flow_v2_flows6/mnist_results"
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(OUTDIR, exist_ok=True)
@@ -77,7 +87,7 @@ def display_image(path):
 # ============================================================
 
 class MLP(nn.Module):
-    def __init__(self, in_dim, out_dim, hidden_dim=256):
+    def __init__(self, in_dim, out_dim, hidden_dim=512):
         super().__init__()
 
         self.net = nn.Sequential(
@@ -99,7 +109,7 @@ class MLP(nn.Module):
 # ============================================================
 
 class StableRealNVP(nn.Module):
-    def __init__(self, dim=784, hidden_dim=256):
+    def __init__(self, dim=784, hidden_dim=512):
         super().__init__()
 
         self.dim = dim
@@ -244,7 +254,7 @@ def save_loss_curve(loss_history, sw_history, epoch, outdir=OUTDIR, display_resu
 
     plt.figure(figsize=(8, 5))
     plt.plot(loss_history, label="Loss totale")
-    plt.plot(sw_history, label="Sliced Wasserstein")
+    plt.plot(sw_history, label="Sliced Wasserstein SW2")
     plt.xlabel("Epoch")
     plt.ylabel("Valeur")
     plt.title("Évolution de la loss")
@@ -313,25 +323,26 @@ def main():
     print("Device utilisé :", device)
 
     # ========================================================
-    # Hyperparamètres
+    # Hyperparamètres nouvelle version
     # ========================================================
 
     batch_size = 128
-    epochs = 100
+    epochs = 150
 
     dim = 28 * 28
-    nb_flows = 4
-    hidden_dim = 256
+    nb_flows = 6
+    hidden_dim = 512
 
     lr = 1e-4
-    num_projections = 200
+    num_projections = 500
 
-    lamb = 1e-6
-    gamma = 1e-6
+    lamb = 1e-7
+    gamma = 1e-7
 
     display_every = 10
     checkpoint_every = 10
 
+    # Important : False car on change l'architecture du modèle
     RESUME = False
     RESUME_CHECKPOINT_PATH = "/kaggle/input/ton-output/latest_checkpoint.pth"
 
@@ -373,7 +384,6 @@ def main():
 
     model = SWFlowModel(flows, device).to(device)
 
-    # Vérification du nombre de paramètres entraînables
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("Nombre de paramètres entraînables :", total_params)
 
@@ -407,6 +417,7 @@ def main():
     print("num_projections =", num_projections)
     print("lambda =", lamb)
     print("gamma =", gamma)
+    print("SAVE_DIR =", SAVE_DIR)
     print("________________________________")
 
     last_real_images = None
@@ -436,13 +447,18 @@ def main():
 
             generated, shatten, _ = model(source)
 
+            # Nouvelle version de la SW loss :
+            # root=False => on optimise SW_2^2
+            # reduction="mean" => une seule valeur scalaire
             sw = sliced_wasserstein_distance(
                 generated,
                 target,
-                num_projections,
-                2,
-                device
-            ).mean()
+                num_projections=num_projections,
+                p=2,
+                device=device,
+                root=False,
+                reduction="mean"
+            )
 
             cost = model.transport_cost(source).mean()
 
@@ -453,7 +469,6 @@ def main():
 
             loss = sw + lamb * cost + gamma * shatten_reg
 
-            # Sécurité contre les NaN
             if torch.isnan(loss):
                 print("NaN détecté, arrêt de l'entraînement")
                 return
@@ -480,15 +495,11 @@ def main():
 
         print(
             f"Epoch {epoch}/{epochs} | "
-            f"SW: {avg_sw:.6f} | "
+            f"SW2: {avg_sw:.6f} | "
             f"Cost: {avg_cost:.6f} | "
             f"Reg: {avg_reg:.6f} | "
             f"Loss: {avg_loss:.6f}"
         )
-
-        # ====================================================
-        # Sauvegarde latest checkpoint
-        # ====================================================
 
         latest_checkpoint_path = os.path.join(SAVE_DIR, "latest_checkpoint.pth")
 
@@ -500,10 +511,6 @@ def main():
             sw_history=sw_history,
             path=latest_checkpoint_path
         )
-
-        # ====================================================
-        # Sauvegarde checkpoint par intervalle
-        # ====================================================
 
         if epoch % checkpoint_every == 0:
             checkpoint_path = os.path.join(SAVE_DIR, f"checkpoint_epoch_{epoch}.pth")
@@ -517,16 +524,12 @@ def main():
                 path=checkpoint_path
             )
 
-        # ====================================================
-        # Affichage notebook Kaggle
-        # ====================================================
-
         if epoch % display_every == 0:
             clear_output(wait=True)
 
             print(
                 f"Epoch {epoch}/{epochs} | "
-                f"SW: {avg_sw:.6f} | "
+                f"SW2: {avg_sw:.6f} | "
                 f"Cost: {avg_cost:.6f} | "
                 f"Reg: {avg_reg:.6f} | "
                 f"Loss: {avg_loss:.6f}"
@@ -592,11 +595,7 @@ def main():
         display_result=True
     )
 
-    # ========================================================
-    # Sauvegarde finale du modèle
-    # ========================================================
-
-    model_path = os.path.join(SAVE_DIR, "mnist_swot_flow.pth")
+    model_path = os.path.join(SAVE_DIR, "mnist_swot_flow_v2_flows6.pth")
 
     torch.save(model.state_dict(), model_path)
 

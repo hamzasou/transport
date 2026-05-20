@@ -1,5 +1,4 @@
-torch
 numpy
 matplotlib
-sklearn
 scipy
+scikit-learn
