@@ -1,52 +1,98 @@
-import numpy as np
-
 import torch
 import torch.nn.functional as F
 
-def rand_projections( embedding_dim, num_samples:int):
+
+def rand_projections(embedding_dim, num_samples, device=None, dtype=torch.float32):
     """
-    This function generates num_samples random samples from the latent space's unti sphere.r
+    Génère des directions aléatoires normalisées sur la sphère unité.
 
-    Args:
-        embedding_dim (int): dimention of the embedding
-        sum_samples (int): number of samples
-
-    Return :
-        torch.tensor: tensor of size (num_samples, embedding_dim)
+    Chaque projection theta_j vérifie :
+        ||theta_j||_2 = 1
     """
-    projection = [w / np.sqrt((w**2).sum()) for w in np.random.normal(size=(num_samples, embedding_dim))]
-    projection = np.array(projection)
-    return torch.from_numpy(projection).type(torch.FloatTensor)
+
+    projections = torch.randn(
+        num_samples,
+        embedding_dim,
+        device=device,
+        dtype=dtype
+    )
+
+    projections = F.normalize(projections, p=2, dim=1)
+
+    return projections
 
 
-def sliced_wasserstein_distance(encoded_samples,
-                                 distribution_samples,
-                                 num_projections=50,
-                                 p=2,
-                                 device='cpu'):
+def sliced_wasserstein_distance(
+    encoded_samples,
+    distribution_samples,
+    num_projections=50,
+    p=2,
+    device=None,
+    root=False,
+    reduction="none"
+):
     """
-    Sliced Wasserstein distance between encoded samples and distribution samples
+    Approximation Monte Carlo de la distance Sliced Wasserstein.
 
-    Args:
-        encoded_samples (torch.Tensor): tensor of encoded training samples
-        distribution_samples (torch.Tensor): tensor drawn from the prior distribution
-        num_projection (int): number of projections to approximate sliced wasserstein distance
-        p (int): power of distance metric
-        device (torch.device): torch device 'cpu' or 'cuda' gpu
+    Si root=False :
+        retourne SW_p^p
 
-    Return:
-        torch.Tensor: Tensor of wasserstein distances of size (num_projections, 1)
+    Si root=True :
+        retourne SW_p
+
+    Pour l'entraînement, il est recommandé d'utiliser :
+        root=False
+        reduction="mean"
     """
-    embedding_dim = distribution_samples.size(1)
 
-    projections = rand_projections(embedding_dim, num_projections).to(device)
+    if device is None:
+        device = encoded_samples.device
 
-    encoded_projections = encoded_samples.matmul(projections.transpose(0,1))
-    
-    distribution_projections = (distribution_samples.matmul(projections.transpose(0, 1)))
+    encoded_samples = encoded_samples.to(device)
+    distribution_samples = distribution_samples.to(device)
 
-    wasserstein_distance = (torch.sort(encoded_projections.transpose(0, 1), dim=1)[0] -
-                            torch.sort(distribution_projections.transpose(0, 1), dim=1)[0])
+    if encoded_samples.dim() != 2:
+        raise ValueError("encoded_samples doit être de taille (N, d).")
 
-    wasserstein_distance = torch.pow(wasserstein_distance, p)
-    return wasserstein_distance.mean(1)
+    if distribution_samples.dim() != 2:
+        raise ValueError("distribution_samples doit être de taille (N, d).")
+
+    if encoded_samples.size(1) != distribution_samples.size(1):
+        raise ValueError("Les deux distributions doivent avoir la même dimension d.")
+
+    if encoded_samples.size(0) != distribution_samples.size(0):
+        raise ValueError("Les deux distributions doivent avoir le même nombre d'échantillons N.")
+
+    embedding_dim = encoded_samples.size(1)
+
+    projections = rand_projections(
+        embedding_dim=embedding_dim,
+        num_samples=num_projections,
+        device=device,
+        dtype=encoded_samples.dtype
+    )
+
+    encoded_projections = encoded_samples.matmul(projections.t())
+    distribution_projections = distribution_samples.matmul(projections.t())
+
+    encoded_projections = encoded_projections.t()
+    distribution_projections = distribution_projections.t()
+
+    encoded_projections_sorted = torch.sort(encoded_projections, dim=1)[0]
+    distribution_projections_sorted = torch.sort(distribution_projections, dim=1)[0]
+
+    diff = encoded_projections_sorted - distribution_projections_sorted
+
+    wasserstein_per_projection = torch.abs(diff).pow(p).mean(dim=1)
+
+    if root:
+        wasserstein_per_projection = wasserstein_per_projection.pow(1.0 / p)
+
+    if reduction == "none":
+        return wasserstein_per_projection
+
+    elif reduction == "mean":
+        return wasserstein_per_projection.mean()
+
+    else:
+        raise ValueError("reduction doit être 'none' ou 'mean'.")
