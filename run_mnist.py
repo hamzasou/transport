@@ -325,12 +325,11 @@ def main():
     # ========================================================
     # Hyperparamètres nouvelle version
     # ========================================================
-
     batch_size = 128
-    epochs = 150
+    epochs = 200
 
     dim = 28 * 28
-    nb_flows = 6
+    nb_flows = 8
     hidden_dim = 512
 
     lr = 1e-4
@@ -341,6 +340,7 @@ def main():
 
     display_every = 10
     checkpoint_every = 10
+
 
     # Important : False car on change l'architecture du modèle
     RESUME = False
