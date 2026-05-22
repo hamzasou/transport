@@ -327,13 +327,13 @@ def main():
     # Hyperparamètres nouvelle version
     # ========================================================
     batch_size = 128
-    epochs = 200
+    epochs = 400
 
     dim = 28 * 28
     nb_flows = 12
     hidden_dim = 512
 
-    lr = 1e-4
+    lr = 5e-4
     num_projections = 500
 
     lamb = 1e-7
@@ -341,6 +341,7 @@ def main():
 
     display_every = 10
     checkpoint_every = 10
+
 
 
 
