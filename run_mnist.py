@@ -319,6 +319,7 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
 
 def main():
 
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device utilisé :", device)
 
@@ -329,7 +330,7 @@ def main():
     epochs = 200
 
     dim = 28 * 28
-    nb_flows = 8
+    nb_flows = 12
     hidden_dim = 512
 
     lr = 1e-4
@@ -340,6 +341,7 @@ def main():
 
     display_every = 10
     checkpoint_every = 10
+
 
 
     # Important : False car on change l'architecture du modèle
