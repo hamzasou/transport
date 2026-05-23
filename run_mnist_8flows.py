@@ -1,4 +1,4 @@
-%%writefile /kaggle/working/transport/run_mnist_flows8_bs256.py
+
 
 import os
 import sys
