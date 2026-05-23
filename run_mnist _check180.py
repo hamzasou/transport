@@ -327,14 +327,17 @@ def main():
     # Hyperparamètres pour reprise
     # ========================================================
 
+   
+    # IMPORTANT :
+    # Remplace ce chemin par le vrai chemin trouvé avec :
+    # !find /kaggle/input -name "*.pth"
     batch_size = 128
-    epochs = 300
+    epochs = 400
 
     dim = 28 * 28
     nb_flows = 12
     hidden_dim = 512
 
-    # On reprend depuis epoch 180 avec un learning rate plus petit
     lr = 1e-4
     num_projections = 500
 
@@ -345,13 +348,15 @@ def main():
     checkpoint_every = 10
 
     RESUME = True
+    RESUME_CHECKPOINT_PATH = "/kaggle/input/datasets/hamzasou74/transport-mnist-12-flow-check180/transport_mnist_12_flow_check_180.pth.pth"
 
-    # IMPORTANT :
-    # Remplace ce chemin par le vrai chemin trouvé avec :
-    # !find /kaggle/input -name "*.pth"
-    RESUME_CHECKPOINT_PATH = "/kaggle/input/nom-du-dataset/checkpoint_epoch180.pth"
+    if not os.path.exists(RESUME_CHECKPOINT_PATH):
+        raise FileNotFoundError(f"Checkpoint introuvable : {RESUME_CHECKPOINT_PATH}")
+    else:
+        print("Checkpoint trouvé :", RESUME_CHECKPOINT_PATH)
 
     fixed_noise = torch.randn(64, dim).to(device)
+   
 
     # ========================================================
     # Dataset MNIST
