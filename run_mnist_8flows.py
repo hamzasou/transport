@@ -345,7 +345,7 @@ def main():
     checkpoint_every = 10
 
     RESUME = False
-
+    fixed_noise = torch.randn(64, dim).to(device)
     # ========================================================
     # Dataset MNIST
     # ========================================================
