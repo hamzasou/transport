@@ -338,16 +338,13 @@ def main():
     lr = 5e-4
     num_projections = 500
 
-    lamb = 5e-6
-    gamma = 7e-8
+    lamb = 7e-6
+    gamma = 3.3e-8
 
     display_every = 10
     checkpoint_every = 10
 
     RESUME = False
-    RESUME_CHECKPOINT_PATH = ""
-
-    fixed_noise = torch.randn(64, dim).to(device)
 
     # ========================================================
     # Dataset MNIST
