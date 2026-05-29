@@ -327,14 +327,14 @@ def main():
     # Hyperparamètres : test 8 flows
     # ========================================================
 
-    batch_size =128
+    batch_size =256
     epochs = 400
 
     dim = 28 * 28
     nb_flows = 12
     hidden_dim = 512
 
-    lr = 5e-4
+    lr = 2e-4
     num_projections = 500
 
     lamb = 1.2e-5
@@ -342,6 +342,8 @@ def main():
 
     display_every = 10
     checkpoint_every = 10
+    batch_size = 256
+
 
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
