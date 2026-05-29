@@ -327,7 +327,7 @@ def main():
     # Hyperparamètres : test 8 flows
     # ========================================================
 
-    batch_size = 256
+    batch_size =128
     epochs = 400
 
     dim = 28 * 28
