@@ -330,7 +330,6 @@ def main():
  
 
      
- 
     batch_size = 256
     epochs = 400
 
@@ -339,17 +338,17 @@ def main():
     hidden_dim = 512
 
     lr = 3e-4
-    num_projections = 800
+    num_projections = 1000
 
-    lamb = 1.0e-5
-    gamma = 3.7e-8
+    lamb = 8.5e-6
+    gamma = 3.3e-8
 
     display_every = 10
     checkpoint_every = 10
 
     RESUME = False
-    RESUME = False
     RESUME_CHECKPOINT_PATH = ""
+
 
     fixed_noise = torch.randn(64, dim).to(device)
     # ========================================================
