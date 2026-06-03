@@ -338,7 +338,7 @@ def main():
     hidden_dim = 512
 
     lr = 3e-4
-    num_projections = 2000
+    num_projections = 3000
 
     lamb = 8.5e-6
     gamma = 3.3e-8
