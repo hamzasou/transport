@@ -334,7 +334,7 @@ def main():
     epochs = 400
 
     dim = 28 * 28
-    nb_flows = 12
+    nb_flows = 14
     hidden_dim = 512
 
     lr = 2e-4
