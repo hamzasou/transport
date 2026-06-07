@@ -338,7 +338,7 @@ def main():
     hidden_dim = 512
 
     nb_flows = 14
-    lr = 7.5e-5
+    lr = 5e-5
     num_projections = 2000
 
     lamb = 8.5e-6
