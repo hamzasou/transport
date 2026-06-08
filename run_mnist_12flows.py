@@ -1,5 +1,3 @@
-
-
 import os
 import sys
 import subprocess
@@ -52,10 +50,11 @@ from src.models import SWFlowModel
 
 
 # ============================================================
-# Chemins Kaggle - test 8 flows, batch size 256
+# Chemins Kaggle - test bruit gaussien contrôlé std = 0.7
 # ============================================================
-SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows12_bs256_lr5e4_lamb12e5_gamma5e8"
-OUTDIR = "/kaggle/working/mnist_swot_flow_flows12_bs256_lr5e4_lamb12e5_gamma5e8/mnist_results"
+
+SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows14_bs256_lr3e5_noise07_clean"
+OUTDIR = os.path.join(SAVE_DIR, "mnist_results")
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(OUTDIR, exist_ok=True)
@@ -164,7 +163,13 @@ class StableRealNVP(nn.Module):
 # Sauvegarde images générées
 # ============================================================
 
-def save_generated_images(model, device, epoch, fixed_noise, outdir=OUTDIR, display_result=True):
+def save_generated_images(
+    model,
+    epoch,
+    fixed_noise,
+    outdir=OUTDIR,
+    display_result=True
+):
     model.eval()
     os.makedirs(outdir, exist_ok=True)
 
@@ -173,6 +178,7 @@ def save_generated_images(model, device, epoch, fixed_noise, outdir=OUTDIR, disp
 
         generated = generated.view(fixed_noise.size(0), 1, 28, 28)
 
+        # Retour de [-1, 1] vers [0, 1] pour affichage
         generated = (generated + 1) / 2
         generated = torch.clamp(generated, 0, 1)
 
@@ -200,7 +206,6 @@ def save_generated_images(model, device, epoch, fixed_noise, outdir=OUTDIR, disp
 def save_comparison_images(
     model,
     real_images,
-    device,
     epoch,
     fixed_noise,
     outdir=OUTDIR,
@@ -212,11 +217,14 @@ def save_comparison_images(
     n = fixed_noise.size(0)
 
     with torch.no_grad():
+        device = fixed_noise.device
+
         real_images = real_images[:n].to(device)
 
         generated, _, _ = model(fixed_noise)
         generated = generated.view(n, 1, 28, 28)
 
+        # Retour de [-1, 1] vers [0, 1] pour affichage
         real_images = (real_images + 1) / 2
         generated = (generated + 1) / 2
 
@@ -248,7 +256,13 @@ def save_comparison_images(
 # Courbe loss
 # ============================================================
 
-def save_loss_curve(loss_history, sw_history, epoch, outdir=OUTDIR, display_result=True):
+def save_loss_curve(
+    loss_history,
+    sw_history,
+    epoch,
+    outdir=OUTDIR,
+    display_result=True
+):
     os.makedirs(outdir, exist_ok=True)
 
     path = os.path.join(outdir, f"loss_curve_epoch_{epoch}.png")
@@ -289,6 +303,7 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "loss_history": loss_history,
         "sw_history": sw_history,
+        "noise_std": model.noise_std if hasattr(model, "noise_std") else None,
     }, path)
 
     print("Checkpoint sauvegardé :", path)
@@ -308,6 +323,10 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
     loss_history = checkpoint["loss_history"]
     sw_history = checkpoint["sw_history"]
 
+    if "noise_std" in checkpoint and checkpoint["noise_std"] is not None:
+        if hasattr(model, "set_noise_std"):
+            model.set_noise_std(checkpoint["noise_std"])
+
     print("Checkpoint chargé :", checkpoint_path)
     print("Reprise à partir de epoch :", start_epoch)
 
@@ -324,12 +343,9 @@ def main():
     print("Device utilisé :", device)
 
     # ========================================================
-    # Hyperparamètres : test 8 flows
+    # Hyperparamètres
     # ========================================================
 
- 
- 
-     
     batch_size = 256
     epochs = 400
 
@@ -337,12 +353,19 @@ def main():
     nb_flows = 14
     hidden_dim = 512
 
-    nb_flows = 14
-    lr = 5e-5
+    lr = 3e-5
     num_projections = 2000
 
     lamb = 8.5e-6
     gamma = 3.3e-8
+
+    # ========================================================
+    # Bruit gaussien contrôlé
+    # Source : Z ~ N(0, noise_std^2 I)
+    # Ici : Z ~ N(0, 0.7^2 I)
+    # ========================================================
+
+    noise_std = 0.7
 
     display_every = 10
     checkpoint_every = 10
@@ -350,10 +373,9 @@ def main():
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
 
-
-    fixed_noise = torch.randn(64, dim).to(device)
     # ========================================================
     # Dataset MNIST
+    # Les images sont normalisées de [0,1] vers [-1,1]
     # ========================================================
 
     transform = transforms.Compose([
@@ -386,7 +408,11 @@ def main():
         for _ in range(nb_flows)
     ]
 
-    model = SWFlowModel(flows, device).to(device)
+    model = SWFlowModel(
+        flows=flows,
+        device=device,
+        noise_std=noise_std
+    ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("Nombre de paramètres entraînables :", total_params)
@@ -411,10 +437,14 @@ def main():
             device=device
         )
 
+        # Possibilité de changer le learning rate après reprise
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
         best_loss = min(loss_history) if len(loss_history) > 0 else float("inf")
+
+    # Bruit fixe utilisé pour suivre l'évolution de la génération
+    fixed_noise = model.sample_noise(64, dim)
 
     print("Start MNIST SWOT-Flow training")
     print("________________________________")
@@ -428,7 +458,9 @@ def main():
     print("num_projections =", num_projections)
     print("lambda =", lamb)
     print("gamma =", gamma)
+    print("noise_std =", noise_std)
     print("SAVE_DIR =", SAVE_DIR)
+    print("OUTDIR =", OUTDIR)
     print("RESUME =", RESUME)
     print("________________________________")
 
@@ -453,7 +485,9 @@ def main():
 
             target = images.view(current_batch_size, -1)
 
-            source = torch.randn(current_batch_size, dim).to(device)
+            # Source gaussienne contrôlée :
+            # Z ~ N(0, 0.7^2 I)
+            source = model.sample_noise(current_batch_size, dim)
 
             optimizer.zero_grad()
 
@@ -526,6 +560,10 @@ def main():
             f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW)"
         )
 
+        # ====================================================
+        # Sauvegarde latest checkpoint
+        # ====================================================
+
         latest_checkpoint_path = os.path.join(SAVE_DIR, "latest_checkpoint.pth")
 
         save_checkpoint(
@@ -536,6 +574,10 @@ def main():
             sw_history=sw_history,
             path=latest_checkpoint_path
         )
+
+        # ====================================================
+        # Sauvegarde best checkpoint
+        # ====================================================
 
         if avg_loss < best_loss:
             best_loss = avg_loss
@@ -554,6 +596,10 @@ def main():
             print("Nouveau meilleur checkpoint sauvegardé.")
             print("Best loss :", best_loss)
 
+        # ====================================================
+        # Sauvegarde périodique
+        # ====================================================
+
         if epoch % checkpoint_every == 0:
             checkpoint_path = os.path.join(SAVE_DIR, f"checkpoint_epoch_{epoch}.pth")
 
@@ -565,6 +611,10 @@ def main():
                 sw_history=sw_history,
                 path=checkpoint_path
             )
+
+        # ====================================================
+        # Affichage périodique
+        # ====================================================
 
         if epoch % display_every == 0:
             clear_output(wait=True)
@@ -585,7 +635,6 @@ def main():
 
             save_generated_images(
                 model=model,
-                device=device,
                 epoch=epoch,
                 fixed_noise=fixed_noise,
                 outdir=OUTDIR,
@@ -595,7 +644,6 @@ def main():
             save_comparison_images(
                 model=model,
                 real_images=last_real_images,
-                device=device,
                 epoch=epoch,
                 fixed_noise=fixed_noise,
                 outdir=OUTDIR,
@@ -618,7 +666,6 @@ def main():
 
     save_generated_images(
         model=model,
-        device=device,
         epoch="final",
         fixed_noise=fixed_noise,
         outdir=OUTDIR,
@@ -628,7 +675,6 @@ def main():
     save_comparison_images(
         model=model,
         real_images=last_real_images,
-        device=device,
         epoch="final",
         fixed_noise=fixed_noise,
         outdir=OUTDIR,
@@ -643,7 +689,10 @@ def main():
         display_result=True
     )
 
-    model_path = os.path.join(SAVE_DIR, "mnist_swot_flow_flows8_bs256_lr5e4_balanced.pth")
+    model_path = os.path.join(
+        SAVE_DIR,
+        "mnist_swot_flow_flows14_bs256_lr3e5_noise07_clean.pth"
+    )
 
     torch.save(model.state_dict(), model_path)
 
