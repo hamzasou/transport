@@ -23,7 +23,7 @@ class SWFlowModel(nn.Module):
         generated = T(z)
     """
 
-    def __init__(self, flows, device="cpu", noise_std=1.0):
+    def __init__(self, flows, device="cpu", noise_std=0.5):
         super().__init__()
 
         if flows is None or len(flows) == 0:

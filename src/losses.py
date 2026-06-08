@@ -8,13 +8,6 @@ def rand_projections(
     device=None,
     dtype=torch.float32
 ):
-    """
-    Génère des directions aléatoires normalisées sur la sphère unité.
-
-    Chaque projection theta_j vérifie :
-        ||theta_j||_2 = 1
-    """
-
     if embedding_dim <= 0:
         raise ValueError("embedding_dim doit être strictement positif.")
 
@@ -47,23 +40,6 @@ def sliced_wasserstein_distance(
     root=False,
     reduction="none"
 ):
-    """
-    Approximation Monte Carlo de la distance Sliced Wasserstein.
-
-    encoded_samples : échantillons générés, de taille (N, d)
-    distribution_samples : échantillons cibles, de taille (N, d)
-
-    Si root=False :
-        retourne une approximation de SW_p^p.
-
-    Si root=True :
-        retourne une approximation de SW_p.
-
-    Pour l'entraînement, il est recommandé d'utiliser :
-        root=False
-        reduction="mean"
-    """
-
     if device is None:
         device = encoded_samples.device
 
@@ -77,7 +53,10 @@ def sliced_wasserstein_distance(
         raise ValueError("reduction doit être 'none' ou 'mean'.")
 
     encoded_samples = encoded_samples.to(device)
-    distribution_samples = distribution_samples.to(device)
+    distribution_samples = distribution_samples.to(
+        device=device,
+        dtype=encoded_samples.dtype
+    )
 
     if encoded_samples.dim() != 2:
         raise ValueError("encoded_samples doit être de taille (N, d).")
