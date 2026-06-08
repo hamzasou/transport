@@ -6,35 +6,21 @@ def rand_projections(
     embedding_dim,
     num_samples,
     device=None,
-    dtype=torch.float32,
-    positive_directions=False
+    dtype=torch.float32
 ):
     """
-    Génère des directions aléatoires normalisées.
+    Génère des directions aléatoires normalisées sur la sphère unité.
 
-    Si positive_directions=False :
-        on génère des directions gaussiennes normalisées.
-        C'est le choix standard pour la Sliced Wasserstein.
-
-    Si positive_directions=True :
-        on génère des directions positives normalisées.
-        C'est une variante expérimentale adaptée aux données dans [0,1]^d.
+    Chaque projection theta_j vérifie :
+        ||theta_j||_2 = 1
     """
 
-    if positive_directions:
-        projections = torch.rand(
-            num_samples,
-            embedding_dim,
-            device=device,
-            dtype=dtype
-        )
-    else:
-        projections = torch.randn(
-            num_samples,
-            embedding_dim,
-            device=device,
-            dtype=dtype
-        )
+    projections = torch.randn(
+        num_samples,
+        embedding_dim,
+        device=device,
+        dtype=dtype
+    )
 
     projections = F.normalize(projections, p=2, dim=1)
 
@@ -48,53 +34,21 @@ def sliced_wasserstein_distance(
     p=2,
     device=None,
     root=False,
-    reduction="none",
-    positive_directions=False
+    reduction="none"
 ):
     """
     Approximation Monte Carlo de la distance Sliced Wasserstein.
 
-    Paramètres
-    ----------
-    encoded_samples : torch.Tensor
-        Échantillons générés par le modèle, de taille (N, d).
+    encoded_samples : échantillons générés, de taille (N, d)
+    distribution_samples : échantillons cibles, de taille (N, d)
 
-    distribution_samples : torch.Tensor
-        Échantillons de la distribution cible, de taille (N, d).
+    Si root=False :
+        retourne une approximation de SW_p^p.
 
-    num_projections : int
-        Nombre de projections aléatoires utilisées.
+    Si root=True :
+        retourne une approximation de SW_p.
 
-    p : int ou float
-        Ordre de la distance de Wasserstein.
-
-    device : torch.device
-        Device utilisé : CPU ou GPU.
-
-    root : bool
-        Si root=False :
-            retourne une approximation de SW_p^p.
-
-        Si root=True :
-            retourne une approximation de SW_p.
-
-    reduction : str
-        "none" :
-            retourne la valeur pour chaque projection.
-
-        "mean" :
-            retourne la moyenne sur toutes les projections.
-
-    positive_directions : bool
-        Si False :
-            directions gaussiennes normalisées, version standard.
-
-        Si True :
-            directions positives normalisées, variante expérimentale.
-
-    Remarque
-    --------
-    Pour l'entraînement SWOT-Flow, il est recommandé d'utiliser :
+    Pour l'entraînement, il est recommandé d'utiliser :
         root=False
         reduction="mean"
     """
@@ -127,36 +81,48 @@ def sliced_wasserstein_distance(
         embedding_dim=embedding_dim,
         num_samples=num_projections,
         device=device,
-        dtype=encoded_samples.dtype,
-        positive_directions=positive_directions
+        dtype=encoded_samples.dtype
     )
 
+    # Projection des échantillons sur les directions aléatoires
     encoded_projections = encoded_samples.matmul(projections.t())
     distribution_projections = distribution_samples.matmul(projections.t())
 
+    # Chaque ligne correspond à une projection
     encoded_projections = encoded_projections.t()
     distribution_projections = distribution_projections.t()
 
-    encoded_projections_sorted = torch.sort(encoded_projections, dim=1)[0]
-    distribution_projections_sorted = torch.sort(distribution_projections, dim=1)[0]
+    # Tri des projections pour calculer Wasserstein en dimension 1
+    encoded_projections_sorted = torch.sort(
+        encoded_projections,
+        dim=1
+    )[0]
+
+    distribution_projections_sorted = torch.sort(
+        distribution_projections,
+        dim=1
+    )[0]
 
     diff = encoded_projections_sorted - distribution_projections_sorted
 
+    # Approximation de W_p^p pour chaque projection
     wasserstein_per_projection = torch.abs(diff).pow(p).mean(dim=1)
 
     if reduction == "none":
         if root:
             return wasserstein_per_projection.pow(1.0 / p)
-        else:
-            return wasserstein_per_projection
+
+        return wasserstein_per_projection
 
     elif reduction == "mean":
-        sw = wasserstein_per_projection.mean()
+        # Approximation de SW_p^p
+        sw_power = wasserstein_per_projection.mean()
 
         if root:
-            sw = sw.pow(1.0 / p)
+            # Approximation de SW_p
+            return sw_power.pow(1.0 / p)
 
-        return sw
+        return sw_power
 
     else:
         raise ValueError("reduction doit être 'none' ou 'mean'.")

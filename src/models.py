@@ -10,14 +10,60 @@ class SWFlowModel(nn.Module):
     Args:
         flows (list): liste des transformations/flows à appliquer.
         device (str or torch.device): device utilisé, par exemple "cpu" ou "cuda".
+        noise_std (float): écart-type du bruit gaussien source.
+                           Si noise_std = 0.7, alors Z ~ N(0, 0.7^2 I).
     """
 
-    def __init__(self, flows, device="cpu"):
+    def __init__(self, flows, device="cpu", noise_std=1.0):
         super().__init__()
 
-        self.device = device
+        self.device = torch.device(device)
         self.flows = nn.ModuleList(flows).to(self.device)
         self.nb_flows = len(flows)
+
+        # Écart-type du bruit gaussien source
+        self.noise_std = noise_std
+
+    def set_noise_std(self, noise_std):
+        """
+        Permet de modifier l'écart-type du bruit après création du modèle.
+        """
+        self.noise_std = noise_std
+
+    def sample_noise(self, nb_samples, dim):
+        """
+        Génère un bruit gaussien contrôlé :
+
+            Z ~ N(0, noise_std^2 I)
+
+        Exemple :
+            noise_std = 0.7 donne Z ~ N(0, 0.7^2 I)
+        """
+
+        device = next(self.parameters()).device
+
+        z = self.noise_std * torch.randn(
+            nb_samples,
+            dim,
+            device=device
+        )
+
+        return z
+
+    def generate_from_noise(self, nb_samples, dim):
+        """
+        Génère des données à partir d'un bruit gaussien contrôlé.
+
+        Étapes :
+            z ~ N(0, noise_std^2 I)
+            y = T(z)
+        """
+
+        z = self.sample_noise(nb_samples, dim)
+
+        y, _, _ = self.forward(z)
+
+        return y
 
     def forward(self, x):
         """
