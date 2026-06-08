@@ -15,6 +15,12 @@ def rand_projections(
         ||theta_j||_2 = 1
     """
 
+    if embedding_dim <= 0:
+        raise ValueError("embedding_dim doit être strictement positif.")
+
+    if num_samples <= 0:
+        raise ValueError("num_samples doit être strictement positif.")
+
     projections = torch.randn(
         num_samples,
         embedding_dim,
@@ -22,7 +28,12 @@ def rand_projections(
         dtype=dtype
     )
 
-    projections = F.normalize(projections, p=2, dim=1)
+    projections = F.normalize(
+        projections,
+        p=2,
+        dim=1,
+        eps=1e-12
+    )
 
     return projections
 
@@ -56,6 +67,15 @@ def sliced_wasserstein_distance(
     if device is None:
         device = encoded_samples.device
 
+    if num_projections <= 0:
+        raise ValueError("num_projections doit être strictement positif.")
+
+    if p < 1:
+        raise ValueError("p doit être supérieur ou égal à 1.")
+
+    if reduction not in ["none", "mean"]:
+        raise ValueError("reduction doit être 'none' ou 'mean'.")
+
     encoded_samples = encoded_samples.to(device)
     distribution_samples = distribution_samples.to(device)
 
@@ -75,6 +95,12 @@ def sliced_wasserstein_distance(
             "Les deux distributions doivent avoir le même nombre d'échantillons N."
         )
 
+    if not torch.isfinite(encoded_samples).all():
+        raise ValueError("encoded_samples contient NaN ou Inf.")
+
+    if not torch.isfinite(distribution_samples).all():
+        raise ValueError("distribution_samples contient NaN ou Inf.")
+
     embedding_dim = encoded_samples.size(1)
 
     projections = rand_projections(
@@ -84,15 +110,12 @@ def sliced_wasserstein_distance(
         dtype=encoded_samples.dtype
     )
 
-    # Projection des échantillons sur les directions aléatoires
     encoded_projections = encoded_samples.matmul(projections.t())
     distribution_projections = distribution_samples.matmul(projections.t())
 
-    # Chaque ligne correspond à une projection
     encoded_projections = encoded_projections.t()
     distribution_projections = distribution_projections.t()
 
-    # Tri des projections pour calculer Wasserstein en dimension 1
     encoded_projections_sorted = torch.sort(
         encoded_projections,
         dim=1
@@ -105,24 +128,17 @@ def sliced_wasserstein_distance(
 
     diff = encoded_projections_sorted - distribution_projections_sorted
 
-    # Approximation de W_p^p pour chaque projection
     wasserstein_per_projection = torch.abs(diff).pow(p).mean(dim=1)
 
     if reduction == "none":
         if root:
-            return wasserstein_per_projection.pow(1.0 / p)
+            return wasserstein_per_projection.clamp_min(1e-12).pow(1.0 / p)
 
         return wasserstein_per_projection
 
-    elif reduction == "mean":
-        # Approximation de SW_p^p
-        sw_power = wasserstein_per_projection.mean()
+    sw_power = wasserstein_per_projection.mean()
 
-        if root:
-            # Approximation de SW_p
-            return sw_power.pow(1.0 / p)
+    if root:
+        return sw_power.clamp_min(1e-12).pow(1.0 / p)
 
-        return sw_power
-
-    else:
-        raise ValueError("reduction doit être 'none' ou 'mean'.")
+    return sw_power
