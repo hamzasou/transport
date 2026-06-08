@@ -459,8 +459,8 @@ def main():
     # 500 est beaucoup moins lourd que 1000 et reste correct
     num_projections = 2000
 
-    lamb = 1e-3
-    gamma = 1e-2
+    lamb = 1.7e-4
+    gamma = 5e-1
 
     noise_std = 0.7
 
