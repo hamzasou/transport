@@ -437,16 +437,16 @@ def main():
     # ========================================================
     # Hyperparamètres recommandés
     # ========================================================
-     
-     
+        
+    
    
     batch_size = 256
     epochs = 400
-
+    
     dim = 28 * 28
 
     # Version recommandée stable
-    nb_flows = 12
+    nb_flows = 14
 
     # Si tu veux une version plus lourde après validation :
     # nb_flows = 14
@@ -454,12 +454,12 @@ def main():
     hidden_dim = 512
 
     # Learning rate plus adapté que 3e-5 pour recommencer depuis zéro
-    lr = 5e-5
+    lr = 4e-5
 
     # 500 est beaucoup moins lourd que 1000 et reste correct
     num_projections = 2000
-    lamb = 1.05e-4
-    gamma = 0.29
+    lamb = 1.0e-4
+    gamma = 0.85
  
 
     noise_std = 0.5
