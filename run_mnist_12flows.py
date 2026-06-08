@@ -454,15 +454,15 @@ def main():
     hidden_dim = 512
 
     # Learning rate plus adapté que 3e-5 pour recommencer depuis zéro
-    lr = 1e-4
+    lr = 5e-5
 
     # 500 est beaucoup moins lourd que 1000 et reste correct
     num_projections = 2000
+    lamb = 1.05e-4
+    gamma = 0.29
+ 
 
-    lamb = 1.7e-4
-    gamma = 5e-1
-
-    noise_std = 0.7
+    noise_std = 0.5
 
     display_every = 10
     checkpoint_every = 25
