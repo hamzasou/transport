@@ -45,15 +45,23 @@ if os.path.exists(src_path):
 else:
     raise FileNotFoundError("Le dossier src est introuvable. Vérifie le dépôt GitHub.")
 
+
+# ============================================================
+# Import des fichiers corrigés
+# Important :
+# il faut que src/models.py et src/losses.py contiennent les versions corrigées
+# que je t'ai données avant.
+# ============================================================
+
 from src.losses import sliced_wasserstein_distance
 from src.models import SWFlowModel
 
 
 # ============================================================
-# Chemins Kaggle - test bruit gaussien contrôlé std = 0.7
+# Chemins Kaggle
 # ============================================================
 
-SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows14_bs256_lr3e5_noise07_clean"
+SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows14_bs256_lr3e5_noise07_corrected"
 OUTDIR = os.path.join(SAVE_DIR, "mnist_results")
 
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -269,7 +277,7 @@ def save_loss_curve(
 
     plt.figure(figsize=(8, 5))
     plt.plot(loss_history, label="Loss totale")
-    plt.plot(sw_history, label="Sliced Wasserstein SW2")
+    plt.plot(sw_history, label="Sliced Wasserstein SW2^2")
     plt.xlabel("Epoch")
     plt.ylabel("Valeur")
     plt.title("Évolution de la loss")
@@ -356,6 +364,7 @@ def main():
     lr = 3e-5
     num_projections = 2000
 
+    # Régularisations
     lamb = 8.5e-6
     gamma = 3.3e-8
 
@@ -493,6 +502,8 @@ def main():
 
             generated, shatten, _ = model(source)
 
+            # Distance Sliced-Wasserstein
+            # root=False => on optimise SW_2^2
             sw = sliced_wasserstein_distance(
                 generated,
                 target,
@@ -503,12 +514,13 @@ def main():
                 reduction="mean"
             )
 
-            cost = model.transport_cost(source).mean()
+            # Correction importante :
+            # transport_cost retourne déjà un scalaire moyen.
+            cost = model.transport_cost(source)
 
-            if torch.is_tensor(shatten):
-                shatten_reg = shatten.mean()
-            else:
-                shatten_reg = shatten
+            # Correction importante :
+            # shatten est déjà un scalaire dans le modèle corrigé.
+            shatten_reg = shatten
 
             loss = sw + lamb * cost + gamma * shatten_reg
 
@@ -517,16 +529,16 @@ def main():
                 return
 
             loss.backward()
+
+            # Optionnel mais utile pour éviter les gradients trop grands
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+
             optimizer.step()
 
             total_loss += loss.item()
             total_sw += sw.item()
             total_cost += cost.item()
-
-            if torch.is_tensor(shatten_reg):
-                total_reg += shatten_reg.item()
-            else:
-                total_reg += float(shatten_reg)
+            total_reg += shatten_reg.item()
 
         avg_loss = total_loss / len(loader)
         avg_sw = total_sw / len(loader)
@@ -548,7 +560,7 @@ def main():
 
         print(
             f"Epoch {epoch}/{epochs} | "
-            f"SW2: {avg_sw:.6f} | "
+            f"SW2^2: {avg_sw:.6f} | "
             f"Cost: {avg_cost:.6f} | "
             f"Reg: {avg_reg:.6f} | "
             f"Loss: {avg_loss:.6f}"
@@ -556,8 +568,8 @@ def main():
 
         print(
             f"Contributions | "
-            f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW) | "
-            f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW)"
+            f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW2^2) | "
+            f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW2^2)"
         )
 
         # ====================================================
@@ -621,7 +633,7 @@ def main():
 
             print(
                 f"Epoch {epoch}/{epochs} | "
-                f"SW2: {avg_sw:.6f} | "
+                f"SW2^2: {avg_sw:.6f} | "
                 f"Cost: {avg_cost:.6f} | "
                 f"Reg: {avg_reg:.6f} | "
                 f"Loss: {avg_loss:.6f}"
@@ -629,8 +641,8 @@ def main():
 
             print(
                 f"Contributions | "
-                f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW) | "
-                f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW)"
+                f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW2^2) | "
+                f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW2^2)"
             )
 
             save_generated_images(
@@ -691,7 +703,7 @@ def main():
 
     model_path = os.path.join(
         SAVE_DIR,
-        "mnist_swot_flow_flows14_bs256_lr3e5_noise07_clean.pth"
+        "mnist_swot_flow_flows14_bs256_lr3e5_noise07_corrected.pth"
     )
 
     torch.save(model.state_dict(), model_path)
