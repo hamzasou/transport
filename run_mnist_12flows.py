@@ -437,7 +437,9 @@ def main():
     # ========================================================
     # Hyperparamètres recommandés
     # ========================================================
-        
+    lamb = 1.6e-4
+    gamma = 3.5
+    RESUME = True
     
    
     batch_size = 256
@@ -458,8 +460,8 @@ def main():
 
     # 500 est beaucoup moins lourd que 1000 et reste correct
     num_projections = 2000
-    lamb = 1.8e-4
-    gamma = 1.2
+    lamb = 1.6e-4
+    gamma = 3.5
  
 
     noise_std = 0.5
