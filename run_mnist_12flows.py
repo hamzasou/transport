@@ -441,7 +441,7 @@ def main():
     gamma = 3.5
     RESUME = True
     
-   
+    
     batch_size = 256
     epochs = 400
     
@@ -456,12 +456,12 @@ def main():
     hidden_dim = 512
 
     # Learning rate plus adapté que 3e-5 pour recommencer depuis zéro
-    lr = 4e-5
+    lr = 2e-5
 
     # 500 est beaucoup moins lourd que 1000 et reste correct
     num_projections = 2000
      
-    lamb = 1.8e-4
+    lamb = 1.2e-4
     gamma = 0.6
 
     noise_std = 0.5
