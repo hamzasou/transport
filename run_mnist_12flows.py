@@ -345,7 +345,9 @@ def main():
     # Hyperparamètres
     # ========================================================
  
+ 
 
+    
      
    
    
@@ -359,8 +361,8 @@ def main():
     lr = 5e-5
     num_projections = 2000
 
-    lamb = 8.5e-6
-    gamma = 3.3e-8
+    lamb = 1.2e-5
+    gamma = 1.5e-2
 
     display_every = 10
     checkpoint_every = 10
