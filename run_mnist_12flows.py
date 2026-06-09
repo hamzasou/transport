@@ -1,8 +1,6 @@
 import os
 import sys
 import subprocess
-import random
-import numpy as np
 
 import torch
 import torch.nn as nn
@@ -19,19 +17,10 @@ from IPython.display import Image, display, clear_output
 # Seed pour reproductibilité
 # ============================================================
 
-SEED = 42
-
-random.seed(SEED)
-np.random.seed(SEED)
-
-torch.manual_seed(SEED)
+torch.manual_seed(42)
 
 if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(SEED)
-
-# Reproductibilité plus stricte
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
+    torch.cuda.manual_seed_all(42)
 
 
 # ============================================================
@@ -52,19 +41,11 @@ else:
 src_path = os.path.join(PROJECT_DIR, "src")
 
 if os.path.exists(src_path):
-    if PROJECT_DIR not in sys.path:
-        sys.path.append(PROJECT_DIR)
-
+    sys.path.append(PROJECT_DIR)
     print("Chemin ajouté :", PROJECT_DIR)
 else:
-    raise FileNotFoundError(
-        "Le dossier src est introuvable. Vérifie le dépôt GitHub."
-    )
+    raise FileNotFoundError("Le dossier src est introuvable. Vérifie le dépôt GitHub.")
 
-
-# ============================================================
-# Imports depuis les fichiers corrigés
-# ============================================================
 
 from src.losses import sliced_wasserstein_distance
 from src.models import SWFlowModel
@@ -74,7 +55,7 @@ from src.models import SWFlowModel
 # Chemins Kaggle
 # ============================================================
 
-SAVE_DIR = "/kaggle/working/mnist_swot_flow_stable_flows10_bs256_lr1e4_noise07"
+SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows14_bs256_lr1p5e4_lamb8p5e6_gamma3p3e8"
 OUTDIR = os.path.join(SAVE_DIR, "mnist_results")
 
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -101,30 +82,6 @@ else:
 
 def display_image(path):
     display(Image(filename=path))
-
-
-# ============================================================
-# Sécurisation des tenseurs scalaires
-# ============================================================
-
-def to_scalar(x, name):
-    """
-    Convertit un tenseur en scalaire si nécessaire.
-
-    Cette fonction évite les erreurs lorsque cost ou shatten
-    retournent un vecteur au lieu d'un scalaire.
-    """
-
-    if not torch.is_tensor(x):
-        raise TypeError(f"{name} doit être un torch.Tensor.")
-
-    if x.ndim > 0:
-        x = x.mean()
-
-    if not torch.isfinite(x):
-        raise ValueError(f"{name} contient NaN ou Inf.")
-
-    return x
 
 
 # ============================================================
@@ -156,11 +113,6 @@ class MLP(nn.Module):
 class StableRealNVP(nn.Module):
     def __init__(self, dim=784, hidden_dim=512):
         super().__init__()
-
-        if dim % 2 != 0:
-            raise ValueError(
-                "dim doit être pair pour cette implémentation RealNVP."
-            )
 
         self.dim = dim
         half = dim // 2
@@ -214,41 +166,12 @@ class StableRealNVP(nn.Module):
 
 
 # ============================================================
-# Test rapide de l'inversibilité RealNVP
-# ============================================================
-
-def test_realnvp_inverse(device, dim=784, hidden_dim=512):
-    """
-    Vérifie que inverse(forward(x)) ≈ x.
-    Ce test ne remplace pas l'entraînement, mais il vérifie
-    la cohérence mathématique de la couche RealNVP.
-    """
-
-    layer = StableRealNVP(dim=dim, hidden_dim=hidden_dim).to(device)
-    layer.eval()
-
-    with torch.no_grad():
-        x = torch.randn(8, dim, device=device)
-
-        z, _, _ = layer(x)
-        x_rec, _ = layer.inverse(z)
-
-        error = torch.max(torch.abs(x - x_rec)).item()
-
-    print("Test inverse RealNVP | erreur max :", error)
-
-    if error > 1e-4:
-        print("Attention : erreur d'inversion élevée.")
-    else:
-        print("Test inverse RealNVP validé.")
-
-
-# ============================================================
 # Sauvegarde images générées
 # ============================================================
 
 def save_generated_images(
     model,
+    device,
     epoch,
     fixed_noise,
     outdir=OUTDIR,
@@ -260,18 +183,8 @@ def save_generated_images(
     with torch.no_grad():
         generated, _, _ = model(fixed_noise)
 
-        print(
-            "Stats generated avant affichage | "
-            f"min={generated.min().item():.4f}, "
-            f"max={generated.max().item():.4f}, "
-            f"mean={generated.mean().item():.4f}, "
-            f"std={generated.std().item():.4f}"
-        )
-
         generated = generated.view(fixed_noise.size(0), 1, 28, 28)
 
-        # Les images MNIST réelles sont normalisées dans [-1, 1].
-        # Donc on ramène les sorties dans [0, 1] seulement pour l'affichage.
         generated = (generated + 1) / 2
         generated = torch.clamp(generated, 0, 1)
 
@@ -299,6 +212,7 @@ def save_generated_images(
 def save_comparison_images(
     model,
     real_images,
+    device,
     epoch,
     fixed_noise,
     outdir=OUTDIR,
@@ -310,8 +224,6 @@ def save_comparison_images(
     n = fixed_noise.size(0)
 
     with torch.no_grad():
-        device = fixed_noise.device
-
         real_images = real_images[:n].to(device)
 
         generated, _, _ = model(fixed_noise)
@@ -361,13 +273,13 @@ def save_loss_curve(
 
     plt.figure(figsize=(8, 5))
     plt.plot(loss_history, label="Loss totale")
-    plt.plot(sw_history, label="Sliced Wasserstein SW2^2")
+    plt.plot(sw_history, label="Sliced-Wasserstein SW2²")
     plt.xlabel("Epoch")
     plt.ylabel("Valeur")
     plt.title("Évolution de la loss")
     plt.legend()
     plt.grid(True)
-    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.savefig(path)
     plt.close()
 
     if display_result:
@@ -395,7 +307,6 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "loss_history": loss_history,
         "sw_history": sw_history,
-        "noise_std": model.noise_std if hasattr(model, "noise_std") else None,
     }, path)
 
     print("Checkpoint sauvegardé :", path)
@@ -412,12 +323,8 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
     start_epoch = checkpoint["epoch"] + 1
-    loss_history = checkpoint.get("loss_history", [])
-    sw_history = checkpoint.get("sw_history", [])
-
-    if "noise_std" in checkpoint and checkpoint["noise_std"] is not None:
-        if hasattr(model, "set_noise_std"):
-            model.set_noise_std(checkpoint["noise_std"])
+    loss_history = checkpoint["loss_history"]
+    sw_history = checkpoint["sw_history"]
 
     print("Checkpoint chargé :", checkpoint_path)
     print("Reprise à partir de epoch :", start_epoch)
@@ -435,42 +342,33 @@ def main():
     print("Device utilisé :", device)
 
     # ========================================================
-    # Hyperparamètres recommandés
+    # Hyperparamètres
     # ========================================================
-    lamb = 1.6e-4
-    gamma = 3.5
-    RESUME = True
-    
-    
+ 
+
+     
+   
+   
     batch_size = 256
     epochs = 400
-    
+
     dim = 28 * 28
-
-    # Version recommandée stable
     nb_flows = 14
-
-    # Si tu veux une version plus lourde après validation :
-    # nb_flows = 14
-
     hidden_dim = 512
 
-    # Learning rate plus adapté que 3e-5 pour recommencer depuis zéro
-    lr = 2e-5
-
-    # 500 est beaucoup moins lourd que 1000 et reste correct
+    lr = 5e-5
     num_projections = 2000
-     
-    lamb = 1.2e-4
-    gamma = 0.6
 
-    noise_std = 0.5
+    lamb = 8.5e-6
+    gamma = 3.3e-8
 
     display_every = 10
-    checkpoint_every = 25
+    checkpoint_every = 10
 
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
+
+    fixed_noise = torch.randn(64, dim).to(device)
 
     # ========================================================
     # Dataset MNIST
@@ -498,16 +396,6 @@ def main():
     )
 
     # ========================================================
-    # Test de la couche RealNVP
-    # ========================================================
-
-    test_realnvp_inverse(
-        device=device,
-        dim=dim,
-        hidden_dim=hidden_dim
-    )
-
-    # ========================================================
     # Modèle SWOT-Flow
     # ========================================================
 
@@ -516,11 +404,7 @@ def main():
         for _ in range(nb_flows)
     ]
 
-    model = SWFlowModel(
-        flows=flows,
-        device=device,
-        noise_std=noise_std
-    ).to(device)
+    model = SWFlowModel(flows, device).to(device)
 
     total_params = sum(
         p.numel()
@@ -537,7 +421,6 @@ def main():
     sw_history = []
 
     best_loss = float("inf")
-    best_sw = float("inf")
 
     # ========================================================
     # Reprendre un entraînement si activé
@@ -551,14 +434,10 @@ def main():
             device=device
         )
 
-        # On force le learning rate choisi même après chargement
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
         best_loss = min(loss_history) if len(loss_history) > 0 else float("inf")
-        best_sw = min(sw_history) if len(sw_history) > 0 else float("inf")
-
-    fixed_noise = model.sample_noise(64, dim).to(device)
 
     print("Start MNIST SWOT-Flow training")
     print("________________________________")
@@ -572,9 +451,7 @@ def main():
     print("num_projections =", num_projections)
     print("lambda =", lamb)
     print("gamma =", gamma)
-    print("noise_std =", noise_std)
     print("SAVE_DIR =", SAVE_DIR)
-    print("OUTDIR =", OUTDIR)
     print("RESUME =", RESUME)
     print("________________________________")
 
@@ -591,21 +468,30 @@ def main():
         total_cost = 0.0
         total_reg = 0.0
 
-        model.train()
-
         for images, _ in loader:
             images = images.to(device)
             last_real_images = images
 
             current_batch_size = images.size(0)
 
-            target = images.reshape(current_batch_size, -1)
+            target = images.view(current_batch_size, -1)
 
-            source = model.sample_noise(current_batch_size, dim).to(device)
+            source = torch.randn(
+                current_batch_size,
+                dim,
+                device=device
+            )
 
-            optimizer.zero_grad(set_to_none=True)
+            optimizer.zero_grad()
 
-            generated, shatten, _ = model(source)
+            # Nouvelle version :
+            # generated : images générées
+            # shatten : régularisation normalisée
+            # cost : coût de transport normalisé
+            generated, shatten, _, cost = model(
+                source,
+                return_cost=True
+            )
 
             sw = sliced_wasserstein_distance(
                 generated,
@@ -617,34 +503,19 @@ def main():
                 reduction="mean"
             )
 
-            cost = model.transport_cost(source)
-
-            sw = to_scalar(sw, "sw")
-            cost = to_scalar(cost, "cost")
-            shatten_reg = to_scalar(shatten, "shatten_reg")
-
-            loss = sw + lamb * cost + gamma * shatten_reg
+            loss = sw + lamb * cost + gamma * shatten
 
             if not torch.isfinite(loss):
-                print("NaN ou Inf détecté, arrêt de l'entraînement.")
-                print("sw =", sw.item())
-                print("cost =", cost.item())
-                print("shatten_reg =", shatten_reg.item())
+                print("NaN ou Inf détecté, arrêt de l'entraînement")
                 return
 
             loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=10.0
-            )
-
             optimizer.step()
 
             total_loss += loss.item()
             total_sw += sw.item()
             total_cost += cost.item()
-            total_reg += shatten_reg.item()
+            total_reg += shatten.item()
 
         avg_loss = total_loss / len(loader)
         avg_sw = total_sw / len(loader)
@@ -666,7 +537,7 @@ def main():
 
         print(
             f"Epoch {epoch}/{epochs} | "
-            f"SW2^2: {avg_sw:.6f} | "
+            f"SW2²: {avg_sw:.6f} | "
             f"Cost: {avg_cost:.6f} | "
             f"Reg: {avg_reg:.6f} | "
             f"Loss: {avg_loss:.6f}"
@@ -674,13 +545,23 @@ def main():
 
         print(
             f"Contributions | "
-            f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW2^2) | "
-            f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW2^2)"
+            f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW2²) | "
+            f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW2²)"
         )
 
-        # ====================================================
-        # Sauvegarde meilleur checkpoint selon loss totale
-        # ====================================================
+        latest_checkpoint_path = os.path.join(
+            SAVE_DIR,
+            "latest_checkpoint.pth"
+        )
+
+        save_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            epoch=epoch,
+            loss_history=loss_history,
+            sw_history=sw_history,
+            path=latest_checkpoint_path
+        )
 
         if avg_loss < best_loss:
             best_loss = avg_loss
@@ -699,52 +580,10 @@ def main():
                 path=best_checkpoint_path
             )
 
-            print("Nouveau meilleur checkpoint selon loss totale sauvegardé.")
+            print("Nouveau meilleur checkpoint sauvegardé.")
             print("Best loss :", best_loss)
 
-        # ====================================================
-        # Sauvegarde meilleur checkpoint selon SW seulement
-        # ====================================================
-
-        if avg_sw < best_sw:
-            best_sw = avg_sw
-
-            best_sw_checkpoint_path = os.path.join(
-                SAVE_DIR,
-                "best_sw_checkpoint.pth"
-            )
-
-            save_checkpoint(
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch,
-                loss_history=loss_history,
-                sw_history=sw_history,
-                path=best_sw_checkpoint_path
-            )
-
-            print("Nouveau meilleur checkpoint selon SW sauvegardé.")
-            print("Best SW :", best_sw)
-
-        # ====================================================
-        # Sauvegardes périodiques
-        # ====================================================
-
         if epoch % checkpoint_every == 0:
-            latest_checkpoint_path = os.path.join(
-                SAVE_DIR,
-                "latest_checkpoint.pth"
-            )
-
-            save_checkpoint(
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch,
-                loss_history=loss_history,
-                sw_history=sw_history,
-                path=latest_checkpoint_path
-            )
-
             checkpoint_path = os.path.join(
                 SAVE_DIR,
                 f"checkpoint_epoch_{epoch}.pth"
@@ -759,16 +598,12 @@ def main():
                 path=checkpoint_path
             )
 
-        # ====================================================
-        # Affichage périodique
-        # ====================================================
-
         if epoch % display_every == 0:
             clear_output(wait=True)
 
             print(
                 f"Epoch {epoch}/{epochs} | "
-                f"SW2^2: {avg_sw:.6f} | "
+                f"SW2²: {avg_sw:.6f} | "
                 f"Cost: {avg_cost:.6f} | "
                 f"Reg: {avg_reg:.6f} | "
                 f"Loss: {avg_loss:.6f}"
@@ -776,12 +611,13 @@ def main():
 
             print(
                 f"Contributions | "
-                f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW2^2) | "
-                f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW2^2)"
+                f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW2²) | "
+                f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW2²)"
             )
 
             save_generated_images(
                 model=model,
+                device=device,
                 epoch=epoch,
                 fixed_noise=fixed_noise,
                 outdir=OUTDIR,
@@ -791,6 +627,7 @@ def main():
             save_comparison_images(
                 model=model,
                 real_images=last_real_images,
+                device=device,
                 epoch=epoch,
                 fixed_noise=fixed_noise,
                 outdir=OUTDIR,
@@ -806,13 +643,14 @@ def main():
             )
 
     # ========================================================
-    # Sauvegarde finale
+    # Génération finale après entraînement
     # ========================================================
 
     print("Génération finale après entraînement...")
 
     save_generated_images(
         model=model,
+        device=device,
         epoch="final",
         fixed_noise=fixed_noise,
         outdir=OUTDIR,
@@ -822,6 +660,7 @@ def main():
     save_comparison_images(
         model=model,
         real_images=last_real_images,
+        device=device,
         epoch="final",
         fixed_noise=fixed_noise,
         outdir=OUTDIR,
@@ -838,7 +677,7 @@ def main():
 
     model_path = os.path.join(
         SAVE_DIR,
-        "mnist_swot_flow_stable_final.pth"
+        "mnist_swot_flow_flows14_bs256_lr1p5e4_balanced.pth"
     )
 
     torch.save(model.state_dict(), model_path)
@@ -861,6 +700,10 @@ def main():
 
     print("Tous les résultats sont sauvegardés dans :", SAVE_DIR)
 
+
+# ============================================================
+# Lancer l'entraînement
+# ============================================================
 
 if __name__ == "__main__":
     main()
