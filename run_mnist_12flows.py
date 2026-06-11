@@ -348,19 +348,18 @@ def main():
  
 
 
-    lamb = 3.0e-5
-    gamma = 4.0e-2
-     
+    lamb = 4.0e-5
+    gamma = 4.8e-2
    
    
     batch_size = 256
-    epochs = 400
+    epochs = 500
 
     dim = 28 * 28
     nb_flows = 14
     hidden_dim = 512
 
-    lr = 5e-5
+    lr = 4e-5
     num_projections = 2000
 
   
