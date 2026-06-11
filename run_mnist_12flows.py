@@ -346,12 +346,6 @@ def main():
     # ========================================================
  
  
-
-
-    lamb = 4.0e-5
-    gamma = 4.8e-2
-   
-   
     batch_size = 256
     epochs = 500
 
@@ -359,13 +353,17 @@ def main():
     nb_flows = 14
     hidden_dim = 512
 
-    lr = 4e-5
+    lr = 3e-5
     num_projections = 2000
 
-  
+    lamb = 5.2e-5
+    gamma = 5.8e-2
 
     display_every = 10
-    checkpoint_every = 10
+    checkpoint_every = 20
+
+
+ 
 
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
