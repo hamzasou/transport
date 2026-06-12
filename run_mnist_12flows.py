@@ -347,13 +347,13 @@ def main():
  
  
     batch_size = 256
-    epochs = 500
+    epochs = 450
 
     dim = 28 * 28
     nb_flows = 14
     hidden_dim = 512
 
-    lr = 3e-5
+    lr = 2e-5
     num_projections = 2000
 
     lamb = 5.2e-5
