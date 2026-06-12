@@ -350,7 +350,7 @@ def main():
     epochs = 450
 
     dim = 28 * 28
-    nb_flows = 14
+    nb_flows = 16
     hidden_dim = 512
 
     lr = 3e-5
@@ -361,7 +361,7 @@ def main():
 
     display_every = 10
     checkpoint_every = 20
-
+    
 
  
 
