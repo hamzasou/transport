@@ -350,10 +350,9 @@ def main():
     epochs = 450
 
     dim = 28 * 28
-    nb_flows = 18
+    nb_flows = 20
     hidden_dim = 512
-
-    lr = 5e-5
+    lr = 3e-5
     num_projections = 2500
 
     lamb = 5.2e-5
@@ -362,7 +361,6 @@ def main():
     display_every = 10
     checkpoint_every = 20
     
-    nb_flows = 16
  
 
     RESUME = False
