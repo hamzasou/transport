@@ -350,7 +350,7 @@ def main():
     epochs = 450
 
     dim = 28 * 28
-    nb_flows = 
+    nb_flows = 10
     hidden_dim = 512
     lr = 3e-5
     num_projections = 2000
