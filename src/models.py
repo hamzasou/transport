@@ -1,120 +1,318 @@
+import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn as nn
 
 
-def rand_projections(
-    embedding_dim,
-    num_samples,
-    device=None,
-    dtype=torch.float32
-):
+class SWFlowModel(nn.Module):
     """
-    Génère des directions aléatoires normalisées sur la sphère unité.
+    Sliced-Wasserstein Normalizing Flow model.
 
-    Chaque projection theta_j vérifie :
-        ||theta_j||_2 = 1
+    Args:
+        flows (list): liste des transformations/flows à appliquer.
+        device (str or torch.device): device utilisé, par exemple "cpu" ou "cuda".
     """
 
-    if embedding_dim <= 0:
-        raise ValueError("embedding_dim doit être strictement positif.")
+    def __init__(self, flows, device="cpu"):
+        super().__init__()
 
-    if num_samples <= 0:
-        raise ValueError("num_samples doit être strictement positif.")
+        self.device = device
+        self.flows = nn.ModuleList(flows).to(self.device)
+        self.nb_flows = len(flows)
 
-    projections = torch.randn(
-        num_samples,
-        embedding_dim,
-        device=device,
-        dtype=dtype
-    )
+    def forward(self, x):
+        """
+        Passage direct :
+            x -> T(x)
 
-    projections = F.normalize(
-        projections,
-        p=2,
-        dim=1,
-        eps=1e-12
-    )
+        Returns:
+            x: sortie transformée
+            shatten: régularisation basée sur log_diag
+            log_det: log-déterminant jacobien total
+        """
 
-    return projections
+        m, _ = x.shape
+
+        shatten = torch.zeros((), device=x.device)
+        log_det = torch.zeros(m, device=x.device)
+
+        for flow in self.flows:
+            x, log_diag, ld = flow.forward(x)
+
+            shatten = shatten + torch.sum(torch.pow(log_diag, 2))
+            log_det = log_det + ld
+
+        return x, shatten, log_det
+
+    def transport_cost(self, x):
+        """
+        Coût de transport entre chaque étape intermédiaire.
+
+        Pour chaque flow T_i, on calcule :
+            ||x - T_i(x)||_F
+        """
+
+        cost = torch.zeros(self.nb_flows, device=x.device)
+
+        for i, flow in enumerate(self.flows):
+            z, _, _ = flow.forward(x)
+
+            cost[i] = torch.norm(x - z, p="fro")
+
+            x = z
+
+        return cost
+
+    def forward_barycenter(self, x, nb_flows):
+        """
+        Applique seulement les nb_flows premiers flows.
+        Utile pour visualiser les transports intermédiaires.
+        """
+
+        for flow in self.flows[:nb_flows]:
+            x, _, _ = flow.forward(x)
+
+        return x
+
+    def inverse(self, z):
+        """
+        Passage inverse :
+            z -> T^{-1}(z)
+        """
+
+        for flow in reversed(self.flows):
+            z, _ = flow.inverse(z)
+
+        return z
+
+    def inverse_barycenter(self, x, nb_flows):
+        """
+        Applique seulement nb_flows inverses.
+        """
+
+        reversed_flows = list(reversed(self.flows))
+
+        for flow in reversed_flows[:nb_flows]:
+            x, _ = flow.inverse(x)
+
+        return x
+
+    def sample_x(self, y_sampler, nb_samples):
+        """
+        Échantillonne y puis applique l'inverse pour obtenir x.
+
+        y_sampler doit retourner :
+            data, label
+        """
+
+        data, label = y_sampler(nb_samples)
+
+        if isinstance(data, torch.Tensor):
+            y = data.float().to(self.device)
+        else:
+            y = torch.from_numpy(data.astype(np.float32)).to(self.device)
+
+        x = self.inverse(y)
+
+        return x
+
+    def sample_y(self, x_sampler, nb_samples):
+        """
+        Échantillonne x puis applique le modèle direct pour obtenir y.
+
+        x_sampler doit retourner :
+            data, label
+        """
+
+        data, label = x_sampler(nb_samples)
+
+        if isinstance(data, torch.Tensor):
+            x = data.float().to(self.device)
+        else:
+            x = torch.from_numpy(data.astype(np.float32)).to(self.device)
+
+        y, _, _ = self.forward(x)
+
+        return y
 
 
-def sliced_wasserstein_distance(
-    encoded_samples,
-    distribution_samples,
-    num_projections=50,
-    p=2,
-    device=None,
-    root=False,
-    reduction="none"
-):
-    """
-    Approximation Monte Carlo de la distance Sliced-Wasserstein.
+# ============================================================
+# MLP plus stable pour RealNVP
+# ============================================================
 
-    encoded_samples : tenseur de taille (N, d)
-    distribution_samples : tenseur de taille (N, d)
+class ResidualBlock(nn.Module):
+    def __init__(self, hidden_dim):
+        super().__init__()
 
-    Si root=False :
-        retourne SW_p^p
+        self.net = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU(),
 
-    Si root=True :
-        retourne SW_p
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim)
+        )
 
-    Pour l'entraînement, il est recommandé d'utiliser :
-        root=False
-        reduction="mean"
-    """
+    def forward(self, x):
+        return x + 0.1 * self.net(x)
 
-    if device is None:
-        device = encoded_samples.device
 
-    encoded_samples = encoded_samples.to(device)
-    distribution_samples = distribution_samples.to(device)
+class MLP(nn.Module):
+    def __init__(self, in_dim, out_dim, hidden_dim=512, num_res_blocks=2):
+        super().__init__()
 
-    if encoded_samples.dim() != 2:
-        raise ValueError("encoded_samples doit être de taille (N, d).")
+        layers = [
+            nn.Linear(in_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU()
+        ]
 
-    if distribution_samples.dim() != 2:
-        raise ValueError("distribution_samples doit être de taille (N, d).")
+        for _ in range(num_res_blocks):
+            layers.append(ResidualBlock(hidden_dim))
+            layers.append(nn.SiLU())
 
-    if encoded_samples.size(1) != distribution_samples.size(1):
-        raise ValueError("Les deux distributions doivent avoir la même dimension d.")
+        layers.append(nn.Linear(hidden_dim, out_dim))
 
-    if encoded_samples.size(0) != distribution_samples.size(0):
-        raise ValueError("Les deux distributions doivent avoir le même nombre d'échantillons N.")
+        self.net = nn.Sequential(*layers)
 
-    if p < 1:
-        raise ValueError("p doit être supérieur ou égal à 1.")
+        # Initialisation proche de l'identité
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
 
-    embedding_dim = encoded_samples.size(1)
+    def forward(self, x):
+        return self.net(x)
 
-    projections = rand_projections(
-        embedding_dim=embedding_dim,
-        num_samples=num_projections,
-        device=device,
-        dtype=encoded_samples.dtype
-    )
 
-    encoded_projections = encoded_samples.matmul(projections.t())
-    distribution_projections = distribution_samples.matmul(projections.t())
+# ============================================================
+# RealNVP stable pour paramétrer T_Theta
+# ============================================================
 
-    encoded_projections = encoded_projections.t()
-    distribution_projections = distribution_projections.t()
+class StableRealNVP(nn.Module):
+    def __init__(
+        self,
+        dim=784,
+        hidden_dim=512,
+        num_res_blocks=2,
+        scale_clip=1.5,
+        use_random_permutation=True
+    ):
+        super().__init__()
 
-    encoded_projections_sorted = torch.sort(encoded_projections, dim=1)[0]
-    distribution_projections_sorted = torch.sort(distribution_projections, dim=1)[0]
+        self.dim = dim
+        self.lower_dim = dim // 2
+        self.upper_dim = dim - self.lower_dim
 
-    diff = encoded_projections_sorted - distribution_projections_sorted
+        self.scale_clip = scale_clip
+        self.use_random_permutation = use_random_permutation
 
-    wasserstein_per_projection = torch.abs(diff).pow(p).mean(dim=1)
+        self.t1 = MLP(
+            self.lower_dim,
+            self.upper_dim,
+            hidden_dim=hidden_dim,
+            num_res_blocks=num_res_blocks
+        )
 
-    if root:
-        wasserstein_per_projection = wasserstein_per_projection.pow(1.0 / p)
+        self.s1 = MLP(
+            self.lower_dim,
+            self.upper_dim,
+            hidden_dim=hidden_dim,
+            num_res_blocks=num_res_blocks
+        )
 
-    if reduction == "none":
-        return wasserstein_per_projection
+        self.t2 = MLP(
+            self.upper_dim,
+            self.lower_dim,
+            hidden_dim=hidden_dim,
+            num_res_blocks=num_res_blocks
+        )
 
-    elif reduction == "mean":
-        return wasserstein_per_projection.mean()
+        self.s2 = MLP(
+            self.upper_dim,
+            self.lower_dim,
+            hidden_dim=hidden_dim,
+            num_res_blocks=num_res_blocks
+        )
 
-    else:
-        raise ValueError("reduction doit être 'none' ou 'mean'.")
+        # Permutation interne.
+        # On applique P avant le couplage et P^{-1} après.
+        # Ainsi, si les réseaux sont initialisés à zéro, la couche reste proche de l'identité.
+        if use_random_permutation:
+            perm = torch.randperm(dim)
+            inv_perm = torch.argsort(perm)
+
+            self.register_buffer("perm", perm)
+            self.register_buffer("inv_perm", inv_perm)
+
+    def forward(self, x):
+        """
+        Passage direct :
+            x -> z
+        """
+
+        if self.use_random_permutation:
+            x_work = x[:, self.perm]
+        else:
+            x_work = x
+
+        lower = x_work[:, :self.lower_dim]
+        upper = x_work[:, self.lower_dim:]
+
+        # Premier couplage : upper dépend de lower
+        s1 = self.scale_clip * torch.tanh(self.s1(lower))
+        t1 = self.t1(lower)
+
+        upper = upper * torch.exp(s1) + t1
+
+        # Deuxième couplage : lower dépend de upper
+        s2 = self.scale_clip * torch.tanh(self.s2(upper))
+        t2 = self.t2(upper)
+
+        lower = lower * torch.exp(s2) + t2
+
+        z_work = torch.cat([lower, upper], dim=1)
+
+        if self.use_random_permutation:
+            z = z_work[:, self.inv_perm]
+        else:
+            z = z_work
+
+        log_diag = torch.cat([s2, s1], dim=1)
+        log_det = torch.sum(s1, dim=1) + torch.sum(s2, dim=1)
+
+        return z, log_diag, log_det
+
+    def inverse(self, z):
+        """
+        Passage inverse :
+            z -> x
+        """
+
+        if self.use_random_permutation:
+            z_work = z[:, self.perm]
+        else:
+            z_work = z
+
+        lower = z_work[:, :self.lower_dim]
+        upper = z_work[:, self.lower_dim:]
+
+        # Inverse du deuxième couplage
+        s2 = self.scale_clip * torch.tanh(self.s2(upper))
+        t2 = self.t2(upper)
+
+        lower = (lower - t2) * torch.exp(-s2)
+
+        # Inverse du premier couplage
+        s1 = self.scale_clip * torch.tanh(self.s1(lower))
+        t1 = self.t1(lower)
+
+        upper = (upper - t1) * torch.exp(-s1)
+
+        x_work = torch.cat([lower, upper], dim=1)
+
+        if self.use_random_permutation:
+            x = x_work[:, self.inv_perm]
+        else:
+            x = x_work
+
+        log_det = -torch.sum(s1, dim=1) - torch.sum(s2, dim=1)
+
+        return x, log_det
