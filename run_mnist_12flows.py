@@ -594,17 +594,17 @@ def main():
     nb_flows = 16
     hidden_dim = 512
 
-    lr = 1e-5
+    
     num_projections = 2000
-
-    lamb = 7e-5
-    gamma = 1.7
-
+ 
+    
     noise_std = 0.5
     batch_size = 256
 
 
-
+    lamb = 1.4e-4
+    gamma = 40.0
+    lr = 2e-5
 
 
     display_every = 10
