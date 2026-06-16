@@ -253,16 +253,16 @@ def main():
 
     dim = 28 * 28
 
-    nb_flows = 14
+    nb_flows = 12
     hidden_dim = 512
-    num_res_blocks = 2
+    num_res_blocks = 1
     scale_clip = 1.5
 
-    lr = 3e-5
+    lr = 1e-5
     num_projections = 2000
 
     lamb = 8.5e-6
-    gamma = 3.3e-8
+    gamma = 3e-8
 
     display_every = 10
     checkpoint_every = 20
