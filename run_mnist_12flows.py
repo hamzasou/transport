@@ -589,23 +589,23 @@ def main():
 
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
-
-    batch_size = 256
-    epochs = 400
-
-    dim = 28 * 28
-
+    epochs = 450
+    dim = 784
     nb_flows = 16
     hidden_dim = 512
 
-    lr = 2e-5
+    lr = 1e-5
+    num_projections = 2000
 
-    num_projections = 1500
-
-    lamb = 1.2e-4
-    gamma = 0.6
+    lamb = 7e-5
+    gamma = 1.7
 
     noise_std = 0.5
+    batch_size = 256
+
+
+
+
 
     display_every = 10
     checkpoint_every = 25
