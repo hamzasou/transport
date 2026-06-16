@@ -255,7 +255,7 @@ def main():
 
     nb_flows = 12
     hidden_dim = 512
-    num_res_blocks = 1
+    num_res_blocks = 2
     scale_clip = 1.5
 
     lr = 1e-5
