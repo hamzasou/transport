@@ -1,7 +1,6 @@
 import os
 import sys
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 
@@ -11,13 +10,11 @@ from torch.utils.data import DataLoader
 from IPython.display import Image, display, clear_output
 
 
-PROJECT_DIR = "/kaggle/working/transport"
+# ============================================================
+# Projet
+# ============================================================
 
-if not os.path.exists(PROJECT_DIR):
-    raise FileNotFoundError(
-        "Le dossier /kaggle/working/transport est introuvable. "
-        "Crée d'abord le projet et place losses.py et models.py dans src/."
-    )
+PROJECT_DIR = "/kaggle/working/transport"
 
 if PROJECT_DIR not in sys.path:
     sys.path.append(PROJECT_DIR)
@@ -27,7 +24,7 @@ from src.models import SWFlowModel, StableRealNVP
 
 
 # ============================================================
-# Seed pour reproductibilité
+# Seed
 # ============================================================
 
 torch.manual_seed(42)
@@ -37,10 +34,10 @@ if torch.cuda.is_available():
 
 
 # ============================================================
-# Chemins Kaggle
+# Chemins
 # ============================================================
 
-SAVE_DIR = "/kaggle/working/mnist_swot_flow_stable_realnvp_flows14_bs256_lr3e5"
+SAVE_DIR = "/kaggle/working/mnist_swot_flow_light_realnvp"
 OUTDIR = os.path.join(SAVE_DIR, "mnist_results")
 
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -48,7 +45,7 @@ os.makedirs(OUTDIR, exist_ok=True)
 
 
 # ============================================================
-# Affichage notebook Kaggle
+# Affichage
 # ============================================================
 
 def display_image(path):
@@ -61,7 +58,6 @@ def display_image(path):
 
 def save_generated_images(
     model,
-    device,
     epoch,
     fixed_noise,
     outdir=OUTDIR,
@@ -96,13 +92,12 @@ def save_generated_images(
 
 
 # ============================================================
-# Sauvegarde comparaison réel / généré
+# Comparaison réel / généré
 # ============================================================
 
 def save_comparison_images(
     model,
     real_images,
-    device,
     epoch,
     fixed_noise,
     outdir=OUTDIR,
@@ -112,6 +107,7 @@ def save_comparison_images(
     os.makedirs(outdir, exist_ok=True)
 
     n = fixed_noise.size(0)
+    device = fixed_noise.device
 
     with torch.no_grad():
         real_images = real_images[:n].to(device)
@@ -180,7 +176,7 @@ def save_loss_curve(
 
 
 # ============================================================
-# Sauvegarde checkpoint
+# Checkpoint
 # ============================================================
 
 def save_checkpoint(
@@ -206,10 +202,6 @@ def save_checkpoint(
     print("Checkpoint sauvegardé :", path)
 
 
-# ============================================================
-# Chargement checkpoint
-# ============================================================
-
 def load_checkpoint(model, optimizer, checkpoint_path, device):
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
@@ -227,7 +219,7 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
 
 
 # ============================================================
-# Entraînement principal
+# Entraînement
 # ============================================================
 
 def main():
@@ -245,32 +237,33 @@ def main():
         print("Aucun GPU détecté. Active GPU dans Kaggle.")
 
     # ========================================================
-    # Hyperparamètres
+    # Hyperparamètres légers
     # ========================================================
 
-    batch_size = 256
-    epochs = 400
+    batch_size = 128
+    epochs = 200
 
     dim = 28 * 28
 
-    nb_flows = 12
-    hidden_dim = 512
-    num_res_blocks = 2
-    scale_clip = 1.5
+    nb_flows = 8
+    hidden_dim = 256
+    num_res_blocks = 1
+    scale_clip = 1.0
 
-    lr = 1e-5
-    num_projections = 2000
+    lr = 3e-4
+    num_projections = 1000
 
-    lamb = 8.5e-6
-    gamma = 3e-8
+    lamb = 1e-6
+    gamma = 1e-8
 
-    display_every = 10
-    checkpoint_every = 20
+    display_every = 5
+    checkpoint_every = 25
+    save_latest_every = 5
 
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
 
-    fixed_noise = torch.randn(64, dim).to(device)
+    fixed_noise = torch.randn(64, dim, device=device)
 
     # ========================================================
     # Dataset MNIST
@@ -298,7 +291,7 @@ def main():
     )
 
     # ========================================================
-    # Modèle SWOT-Flow
+    # Modèle
     # ========================================================
 
     flows = [
@@ -312,7 +305,7 @@ def main():
         for _ in range(nb_flows)
     ]
 
-    model = SWFlowModel(flows, device).to(device)
+    model = SWFlowModel(flows, device=device).to(device)
 
     total_params = sum(
         p.numel()
@@ -322,7 +315,11 @@ def main():
 
     print("Nombre de paramètres entraînables :", total_params)
 
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=1e-6
+    )
 
     start_epoch = 1
     loss_history = []
@@ -331,7 +328,7 @@ def main():
     best_loss = float("inf")
 
     # ========================================================
-    # Reprendre un entraînement si activé
+    # Reprise checkpoint
     # ========================================================
 
     if RESUME:
@@ -349,7 +346,6 @@ def main():
 
     print("Start MNIST SWOT-Flow training")
     print("________________________________")
-    print("Hyperparamètres :")
     print("batch_size =", batch_size)
     print("epochs =", epochs)
     print("dim =", dim)
@@ -378,6 +374,8 @@ def main():
         total_cost = 0.0
         total_reg = 0.0
 
+        model.train()
+
         for images, _ in loader:
             images = images.to(device)
             last_real_images = images
@@ -392,9 +390,12 @@ def main():
                 device=device
             )
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
-            generated, shatten, _ = model(source)
+            generated, shatten_reg, _, cost = model(
+                source,
+                return_cost=True
+            )
 
             sw = sliced_wasserstein_distance(
                 generated,
@@ -405,13 +406,6 @@ def main():
                 root=False,
                 reduction="mean"
             )
-
-            cost = model.transport_cost(source).mean()
-
-            if torch.is_tensor(shatten):
-                shatten_reg = shatten.mean()
-            else:
-                shatten_reg = shatten
 
             loss = sw + lamb * cost + gamma * shatten_reg
 
@@ -431,11 +425,7 @@ def main():
             total_loss += loss.item()
             total_sw += sw.item()
             total_cost += cost.item()
-
-            if torch.is_tensor(shatten_reg):
-                total_reg += shatten_reg.item()
-            else:
-                total_reg += float(shatten_reg)
+            total_reg += shatten_reg.item()
 
         avg_loss = total_loss / len(loader)
         avg_sw = total_sw / len(loader)
@@ -465,24 +455,11 @@ def main():
 
         print(
             f"Contributions | "
-            f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW) | "
-            f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW)"
+            f"lambda*Cost: {cost_contrib:.8f} ({cost_percent:.2f}% de SW) | "
+            f"gamma*Reg: {reg_contrib:.8f} ({reg_percent:.2f}% de SW)"
         )
 
-        latest_checkpoint_path = os.path.join(
-            SAVE_DIR,
-            "latest_checkpoint.pth"
-        )
-
-        save_checkpoint(
-            model=model,
-            optimizer=optimizer,
-            epoch=epoch,
-            loss_history=loss_history,
-            sw_history=sw_history,
-            path=latest_checkpoint_path
-        )
-
+        # Sauvegarde meilleur modèle
         if avg_loss < best_loss:
             best_loss = avg_loss
 
@@ -503,6 +480,23 @@ def main():
             print("Nouveau meilleur checkpoint sauvegardé.")
             print("Best loss :", best_loss)
 
+        # Sauvegarde latest moins fréquente
+        if epoch % save_latest_every == 0:
+            latest_checkpoint_path = os.path.join(
+                SAVE_DIR,
+                "latest_checkpoint.pth"
+            )
+
+            save_checkpoint(
+                model=model,
+                optimizer=optimizer,
+                epoch=epoch,
+                loss_history=loss_history,
+                sw_history=sw_history,
+                path=latest_checkpoint_path
+            )
+
+        # Checkpoint périodique
         if epoch % checkpoint_every == 0:
             checkpoint_path = os.path.join(
                 SAVE_DIR,
@@ -518,6 +512,7 @@ def main():
                 path=checkpoint_path
             )
 
+        # Affichage
         if epoch % display_every == 0:
             clear_output(wait=True)
 
@@ -531,13 +526,12 @@ def main():
 
             print(
                 f"Contributions | "
-                f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW) | "
-                f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW)"
+                f"lambda*Cost: {cost_contrib:.8f} ({cost_percent:.2f}% de SW) | "
+                f"gamma*Reg: {reg_contrib:.8f} ({reg_percent:.2f}% de SW)"
             )
 
             save_generated_images(
                 model=model,
-                device=device,
                 epoch=epoch,
                 fixed_noise=fixed_noise,
                 outdir=OUTDIR,
@@ -547,7 +541,6 @@ def main():
             save_comparison_images(
                 model=model,
                 real_images=last_real_images,
-                device=device,
                 epoch=epoch,
                 fixed_noise=fixed_noise,
                 outdir=OUTDIR,
@@ -563,14 +556,13 @@ def main():
             )
 
     # ========================================================
-    # Génération finale après entraînement
+    # Sauvegarde finale
     # ========================================================
 
     print("Génération finale après entraînement...")
 
     save_generated_images(
         model=model,
-        device=device,
         epoch="final",
         fixed_noise=fixed_noise,
         outdir=OUTDIR,
@@ -580,7 +572,6 @@ def main():
     save_comparison_images(
         model=model,
         real_images=last_real_images,
-        device=device,
         epoch="final",
         fixed_noise=fixed_noise,
         outdir=OUTDIR,
@@ -597,7 +588,7 @@ def main():
 
     model_path = os.path.join(
         SAVE_DIR,
-        f"mnist_swot_flow_flows{nb_flows}_bs{batch_size}_stable_realnvp.pth"
+        f"mnist_swot_flow_flows{nb_flows}_bs{batch_size}_light_realnvp.pth"
     )
 
     torch.save(model.state_dict(), model_path)
@@ -620,10 +611,6 @@ def main():
 
     print("Tous les résultats sont sauvegardés dans :", SAVE_DIR)
 
-
-# ============================================================
-# Lancer l'entraînement
-# ============================================================
 
 if __name__ == "__main__":
     main()
