@@ -247,10 +247,10 @@ def main():
 
     nb_flows = 12
     hidden_dim = 256
-    num_res_blocks = 1
+    num_res_blocks = 2
     scale_clip = 1.0
     
-    lr = 1e-4
+    lr = 2e-4
     num_projections = 1000
 
     lamb = 7e-3
