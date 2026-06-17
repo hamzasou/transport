@@ -245,9 +245,9 @@ def main():
 
     dim = 28 * 28
 
-    nb_flows = 12
+    nb_flows = 8
     hidden_dim = 256
-    num_res_blocks = 2
+    num_res_blocks = 1
     scale_clip = 1.0
     
     lr = 2e-4
