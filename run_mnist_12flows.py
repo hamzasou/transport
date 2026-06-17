@@ -245,13 +245,13 @@ def main():
 
     dim = 28 * 28
 
-    nb_flows = 8
+    nb_flows = 6
     hidden_dim = 256
     num_res_blocks = 1
     scale_clip = 1.0
 
     lr = 3e-4
-    num_projections = 1000
+    num_projections = 300
 
     lamb = 1e-6
     gamma = 1e-8
