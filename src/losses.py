@@ -10,9 +10,6 @@ def rand_projections(
 ):
     """
     Génère des directions aléatoires normalisées sur la sphère unité.
-
-    Chaque projection theta_j vérifie :
-        ||theta_j||_2 = 1
     """
 
     if embedding_dim <= 0:
@@ -41,11 +38,11 @@ def rand_projections(
 def sliced_wasserstein_distance(
     encoded_samples,
     distribution_samples,
-    num_projections=50,
+    num_projections=300,
     p=2,
     device=None,
     root=False,
-    reduction="none"
+    reduction="mean"
 ):
     """
     Approximation Monte Carlo de la distance Sliced-Wasserstein.
@@ -59,7 +56,7 @@ def sliced_wasserstein_distance(
     Si root=True :
         retourne SW_p
 
-    Pour l'entraînement, il est recommandé d'utiliser :
+    Pour l'entraînement :
         root=False
         reduction="mean"
     """
@@ -94,27 +91,32 @@ def sliced_wasserstein_distance(
         dtype=encoded_samples.dtype
     )
 
+    # Projections : (N, d) @ (d, J) = (N, J)
     encoded_projections = encoded_samples.matmul(projections.t())
     distribution_projections = distribution_samples.matmul(projections.t())
 
-    encoded_projections = encoded_projections.t()
-    distribution_projections = distribution_projections.t()
+    # Tri selon les échantillons pour chaque projection
+    encoded_sorted = torch.sort(encoded_projections, dim=0)[0]
+    distribution_sorted = torch.sort(distribution_projections, dim=0)[0]
 
-    encoded_projections_sorted = torch.sort(encoded_projections, dim=1)[0]
-    distribution_projections_sorted = torch.sort(distribution_projections, dim=1)[0]
+    diff = encoded_sorted - distribution_sorted
 
-    diff = encoded_projections_sorted - distribution_projections_sorted
-
-    wasserstein_per_projection = torch.abs(diff).pow(p).mean(dim=1)
-
-    if root:
-        wasserstein_per_projection = wasserstein_per_projection.pow(1.0 / p)
+    # W_p^p pour chaque projection
+    wasserstein_p_per_projection = torch.abs(diff).pow(p).mean(dim=0)
 
     if reduction == "none":
-        return wasserstein_per_projection
+        if root:
+            return wasserstein_p_per_projection.pow(1.0 / p)
+        else:
+            return wasserstein_p_per_projection
 
     elif reduction == "mean":
-        return wasserstein_per_projection.mean()
+        sw_p = wasserstein_p_per_projection.mean()
+
+        if root:
+            return sw_p.pow(1.0 / p)
+        else:
+            return sw_p
 
     else:
         raise ValueError("reduction doit être 'none' ou 'mean'.")
