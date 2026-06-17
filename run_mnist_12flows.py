@@ -241,17 +241,17 @@ def main():
     # ========================================================
     
     batch_size = 128
-    epochs = 200
+    epochs = 400
 
     dim = 28 * 28
 
-    nb_flows = 6
+    nb_flows = 12
     hidden_dim = 256
     num_res_blocks = 1
     scale_clip = 1.0
     
-    lr = 3e-4
-    num_projections = 300
+    lr = 1e-4
+    num_projections = 1000
 
     lamb = 7e-3
     gamma = 7e-3
