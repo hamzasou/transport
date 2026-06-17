@@ -253,9 +253,9 @@ def main():
     lr = 2e-4
     num_projections = 1000
 
-    lamb = 7e-3
-    gamma = 7e-3
-
+    lamb = 0.020
+    gamma = 0.030
+ 
     display_every = 5
     checkpoint_every = 25
     save_latest_every = 5
