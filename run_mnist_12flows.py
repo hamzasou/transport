@@ -239,7 +239,7 @@ def main():
     # ========================================================
     # Hyperparamètres légers
     # ========================================================
-
+    
     batch_size = 128
     epochs = 200
 
@@ -249,12 +249,12 @@ def main():
     hidden_dim = 256
     num_res_blocks = 1
     scale_clip = 1.0
-
+    
     lr = 3e-4
     num_projections = 300
 
-    lamb = 1e-6
-    gamma = 1e-8
+    lamb = 7e-3
+    gamma = 7e-3
 
     display_every = 5
     checkpoint_every = 25
