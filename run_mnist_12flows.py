@@ -1,5 +1,3 @@
-
-
 import os
 import sys
 import subprocess
@@ -52,10 +50,11 @@ from src.models import SWFlowModel
 
 
 # ============================================================
-# Chemins Kaggle - test 8 flows, batch size 256
+# Chemins Kaggle
 # ============================================================
-SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows12_bs256_lr5e4_lamb12e5_gamma5e8"
-OUTDIR = "/kaggle/working/mnist_swot_flow_flows12_bs256_lr5e4_lamb12e5_gamma5e8/mnist_results"
+
+SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows14_bs256_lr5e5_lamb85e7_gamma33e9"
+OUTDIR = os.path.join(SAVE_DIR, "mnist_results")
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(OUTDIR, exist_ok=True)
@@ -70,9 +69,42 @@ print("CUDA disponible :", torch.cuda.is_available())
 
 if torch.cuda.is_available():
     print("Nombre de GPU :", torch.cuda.device_count())
-    print("Nom du GPU :", torch.cuda.get_device_name(0))
+
+    for i in range(torch.cuda.device_count()):
+        print(f"GPU {i} :", torch.cuda.get_device_name(i))
 else:
     print("Aucun GPU détecté. Active GPU dans Kaggle.")
+
+
+# ============================================================
+# Fonction pour récupérer le vrai modèle
+# ============================================================
+
+def unwrap_model(model):
+    """
+    Si le modèle est enveloppé par nn.DataParallel,
+    retourne le modèle interne réel.
+    Sinon, retourne le modèle lui-même.
+    """
+    if isinstance(model, nn.DataParallel):
+        return model.module
+    return model
+
+
+def remove_module_prefix(state_dict):
+    """
+    Corrige les checkpoints sauvegardés avec DataParallel,
+    où les clés commencent parfois par 'module.'.
+    """
+    new_state_dict = {}
+
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            new_state_dict[k[len("module."):]] = v
+        else:
+            new_state_dict[k] = v
+
+    return new_state_dict
 
 
 # ============================================================
@@ -272,7 +304,7 @@ def save_loss_curve(loss_history, sw_history, epoch, outdir=OUTDIR, display_resu
 
 
 # ============================================================
-# Sauvegarde checkpoint
+# Sauvegarde checkpoint compatible DataParallel
 # ============================================================
 
 def save_checkpoint(
@@ -283,9 +315,11 @@ def save_checkpoint(
     sw_history,
     path
 ):
+    base_model = unwrap_model(model)
+
     torch.save({
         "epoch": epoch,
-        "model_state_dict": model.state_dict(),
+        "model_state_dict": base_model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "loss_history": loss_history,
         "sw_history": sw_history,
@@ -295,13 +329,16 @@ def save_checkpoint(
 
 
 # ============================================================
-# Chargement checkpoint
+# Chargement checkpoint compatible DataParallel
 # ============================================================
 
 def load_checkpoint(model, optimizer, checkpoint_path, device):
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
-    model.load_state_dict(checkpoint["model_state_dict"])
+    state_dict = checkpoint["model_state_dict"]
+    state_dict = remove_module_prefix(state_dict)
+
+    unwrap_model(model).load_state_dict(state_dict)
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
     start_epoch = checkpoint["epoch"] + 1
@@ -324,12 +361,9 @@ def main():
     print("Device utilisé :", device)
 
     # ========================================================
-    # Hyperparamètres : test 8 flows
+    # Hyperparamètres
     # ========================================================
 
- 
-
-     
     batch_size = 256
     epochs = 400
 
@@ -348,9 +382,9 @@ def main():
 
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
- 
- 
+
     fixed_noise = torch.randn(64, dim).to(device)
+
     # ========================================================
     # Dataset MNIST
     # ========================================================
@@ -386,6 +420,14 @@ def main():
     ]
 
     model = SWFlowModel(flows, device).to(device)
+
+    # ========================================================
+    # Parallélisme multi-GPU
+    # ========================================================
+
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        print(f"Utilisation de {torch.cuda.device_count()} GPU avec nn.DataParallel")
+        model = nn.DataParallel(model)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("Nombre de paramètres entraînables :", total_params)
@@ -445,7 +487,7 @@ def main():
         total_reg = 0.0
 
         for images, _ in loader:
-            images = images.to(device)
+            images = images.to(device, non_blocking=True)
             last_real_images = images
 
             current_batch_size = images.size(0)
@@ -456,6 +498,8 @@ def main():
 
             optimizer.zero_grad()
 
+            # Passage avant principal.
+            # Avec DataParallel, ce calcul est réparti sur les GPU.
             generated, shatten, _ = model(source)
 
             sw = sliced_wasserstein_distance(
@@ -468,7 +512,9 @@ def main():
                 reduction="mean"
             )
 
-            cost = model.transport_cost(source).mean()
+            # Méthode personnalisée : on récupère le vrai modèle.
+            base_model = unwrap_model(model)
+            cost = base_model.transport_cost(source).mean()
 
             if torch.is_tensor(shatten):
                 shatten_reg = shatten.mean()
@@ -642,9 +688,12 @@ def main():
         display_result=True
     )
 
-    model_path = os.path.join(SAVE_DIR, "mnist_swot_flow_flows8_bs256_lr5e4_balanced.pth")
+    model_path = os.path.join(
+        SAVE_DIR,
+        "mnist_swot_flow_flows14_bs256_lr5e5_balanced.pth"
+    )
 
-    torch.save(model.state_dict(), model_path)
+    torch.save(unwrap_model(model).state_dict(), model_path)
 
     print("Modèle final sauvegardé :", model_path)
 
