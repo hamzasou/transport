@@ -1,6 +1,10 @@
+
+
 import os
 import sys
+import subprocess
 import torch
+import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 
@@ -11,20 +15,7 @@ from IPython.display import Image, display, clear_output
 
 
 # ============================================================
-# Projet
-# ============================================================
-
-PROJECT_DIR = "/kaggle/working/transport"
-
-if PROJECT_DIR not in sys.path:
-    sys.path.append(PROJECT_DIR)
-
-from src.losses import sliced_wasserstein_distance
-from src.models import SWFlowModel, StableRealNVP
-
-
-# ============================================================
-# Seed
+# Seed pour reproductibilité
 # ============================================================
 
 torch.manual_seed(42)
@@ -34,18 +25,58 @@ if torch.cuda.is_available():
 
 
 # ============================================================
-# Chemins
+# Clonage / chemin du projet
 # ============================================================
 
-SAVE_DIR = "/kaggle/working/mnist_swot_flow_light_realnvp"
-OUTDIR = os.path.join(SAVE_DIR, "mnist_results")
+PROJECT_DIR = "/kaggle/working/transport"
+
+if not os.path.exists(PROJECT_DIR):
+    print("Clonage du projet...")
+    subprocess.run(
+        ["git", "clone", "https://github.com/hamzasou/transport.git", PROJECT_DIR],
+        check=True
+    )
+else:
+    print("Le projet existe déjà :", PROJECT_DIR)
+
+src_path = os.path.join(PROJECT_DIR, "src")
+
+if os.path.exists(src_path):
+    sys.path.append(PROJECT_DIR)
+    print("Chemin ajouté :", PROJECT_DIR)
+else:
+    raise FileNotFoundError("Le dossier src est introuvable. Vérifie le dépôt GitHub.")
+
+from src.losses import sliced_wasserstein_distance
+from src.models import SWFlowModel
+
+
+# ============================================================
+# Chemins Kaggle - test 8 flows, batch size 256
+# ============================================================
+SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows12_bs256_lr5e4_lamb12e5_gamma5e8"
+OUTDIR = "/kaggle/working/mnist_swot_flow_flows12_bs256_lr5e4_lamb12e5_gamma5e8/mnist_results"
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(OUTDIR, exist_ok=True)
 
 
 # ============================================================
-# Affichage
+# Vérification GPU
+# ============================================================
+
+print("Version PyTorch :", torch.__version__)
+print("CUDA disponible :", torch.cuda.is_available())
+
+if torch.cuda.is_available():
+    print("Nombre de GPU :", torch.cuda.device_count())
+    print("Nom du GPU :", torch.cuda.get_device_name(0))
+else:
+    print("Aucun GPU détecté. Active GPU dans Kaggle.")
+
+
+# ============================================================
+# Affichage notebook Kaggle
 # ============================================================
 
 def display_image(path):
@@ -53,16 +84,87 @@ def display_image(path):
 
 
 # ============================================================
+# MLP utilisé dans RealNVP
+# ============================================================
+
+class MLP(nn.Module):
+    def __init__(self, in_dim, out_dim, hidden_dim=512):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+
+            nn.Linear(hidden_dim, out_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+# ============================================================
+# Couche RealNVP stable
+# ============================================================
+
+class StableRealNVP(nn.Module):
+    def __init__(self, dim=784, hidden_dim=512):
+        super().__init__()
+
+        self.dim = dim
+        half = dim // 2
+
+        self.t1 = MLP(half, half, hidden_dim)
+        self.s1 = MLP(half, half, hidden_dim)
+
+        self.t2 = MLP(half, half, hidden_dim)
+        self.s2 = MLP(half, half, hidden_dim)
+
+    def forward(self, x):
+        lower = x[:, :self.dim // 2]
+        upper = x[:, self.dim // 2:]
+
+        s1 = 1.5 * torch.tanh(self.s1(lower))
+        t1 = self.t1(lower)
+        upper = upper * torch.exp(s1) + t1
+
+        s2 = 1.5 * torch.tanh(self.s2(upper))
+        t2 = self.t2(upper)
+        lower = lower * torch.exp(s2) + t2
+
+        z = torch.cat([lower, upper], dim=1)
+
+        log_diag = torch.cat([s1, s2], dim=1)
+        log_det = torch.sum(s1, dim=1) + torch.sum(s2, dim=1)
+
+        return z, log_diag, log_det
+
+    def inverse(self, z):
+        lower = z[:, :self.dim // 2]
+        upper = z[:, self.dim // 2:]
+
+        s2 = 1.5 * torch.tanh(self.s2(upper))
+        t2 = self.t2(upper)
+        lower = (lower - t2) * torch.exp(-s2)
+
+        s1 = 1.5 * torch.tanh(self.s1(lower))
+        t1 = self.t1(lower)
+        upper = (upper - t1) * torch.exp(-s1)
+
+        x = torch.cat([lower, upper], dim=1)
+
+        log_det = -torch.sum(s1, dim=1) - torch.sum(s2, dim=1)
+
+        return x, log_det
+
+
+# ============================================================
 # Sauvegarde images générées
 # ============================================================
 
-def save_generated_images(
-    model,
-    epoch,
-    fixed_noise,
-    outdir=OUTDIR,
-    display_result=True
-):
+def save_generated_images(model, device, epoch, fixed_noise, outdir=OUTDIR, display_result=True):
     model.eval()
     os.makedirs(outdir, exist_ok=True)
 
@@ -92,12 +194,13 @@ def save_generated_images(
 
 
 # ============================================================
-# Comparaison réel / généré
+# Sauvegarde comparaison réel / généré
 # ============================================================
 
 def save_comparison_images(
     model,
     real_images,
+    device,
     epoch,
     fixed_noise,
     outdir=OUTDIR,
@@ -107,7 +210,6 @@ def save_comparison_images(
     os.makedirs(outdir, exist_ok=True)
 
     n = fixed_noise.size(0)
-    device = fixed_noise.device
 
     with torch.no_grad():
         real_images = real_images[:n].to(device)
@@ -146,13 +248,7 @@ def save_comparison_images(
 # Courbe loss
 # ============================================================
 
-def save_loss_curve(
-    loss_history,
-    sw_history,
-    epoch,
-    outdir=OUTDIR,
-    display_result=True
-):
+def save_loss_curve(loss_history, sw_history, epoch, outdir=OUTDIR, display_result=True):
     os.makedirs(outdir, exist_ok=True)
 
     path = os.path.join(outdir, f"loss_curve_epoch_{epoch}.png")
@@ -176,7 +272,7 @@ def save_loss_curve(
 
 
 # ============================================================
-# Checkpoint
+# Sauvegarde checkpoint
 # ============================================================
 
 def save_checkpoint(
@@ -187,20 +283,20 @@ def save_checkpoint(
     sw_history,
     path
 ):
-    tmp_path = path + ".tmp"
-
     torch.save({
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "loss_history": loss_history,
         "sw_history": sw_history,
-    }, tmp_path)
-
-    os.replace(tmp_path, path)
+    }, path)
 
     print("Checkpoint sauvegardé :", path)
 
+
+# ============================================================
+# Chargement checkpoint
+# ============================================================
 
 def load_checkpoint(model, optimizer, checkpoint_path, device):
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -219,52 +315,42 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
 
 
 # ============================================================
-# Entraînement
+# Entraînement principal
 # ============================================================
 
 def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    print("Version PyTorch :", torch.__version__)
-    print("CUDA disponible :", torch.cuda.is_available())
     print("Device utilisé :", device)
 
-    if torch.cuda.is_available():
-        print("Nombre de GPU :", torch.cuda.device_count())
-        print("Nom du GPU :", torch.cuda.get_device_name(0))
-    else:
-        print("Aucun GPU détecté. Active GPU dans Kaggle.")
+    # ========================================================
+    # Hyperparamètres : test 8 flows
+    # ========================================================
 
-    # ========================================================
-    # Hyperparamètres légers
-    # ========================================================
-    
-    batch_size = 128
+ 
+
+     
+    batch_size = 256
     epochs = 400
 
     dim = 28 * 28
+    nb_flows = 14
+    hidden_dim = 512
 
-    nb_flows = 8
-    hidden_dim = 256
-    num_res_blocks = 1
-    scale_clip = 1.0
-    
-    lr = 2e-4
-    num_projections = 1000
+    lr = 5e-4
+    num_projections = 2000
 
-    lamb = 0.020
-    gamma = 0.030
- 
-    display_every = 5
-    checkpoint_every = 25
-    save_latest_every = 5
+    lamb = 8.5e-6
+    gamma = 3.3e-8
+
+    display_every = 10
+    checkpoint_every = 10
 
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
-
-    fixed_noise = torch.randn(64, dim, device=device)
-
+ 
+ 
+    fixed_noise = torch.randn(64, dim).to(device)
     # ========================================================
     # Dataset MNIST
     # ========================================================
@@ -291,35 +377,20 @@ def main():
     )
 
     # ========================================================
-    # Modèle
+    # Modèle SWOT-Flow
     # ========================================================
 
     flows = [
-        StableRealNVP(
-            dim=dim,
-            hidden_dim=hidden_dim,
-            num_res_blocks=num_res_blocks,
-            scale_clip=scale_clip,
-            use_random_permutation=True
-        )
+        StableRealNVP(dim=dim, hidden_dim=hidden_dim)
         for _ in range(nb_flows)
     ]
 
-    model = SWFlowModel(flows, device=device).to(device)
+    model = SWFlowModel(flows, device).to(device)
 
-    total_params = sum(
-        p.numel()
-        for p in model.parameters()
-        if p.requires_grad
-    )
-
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("Nombre de paramètres entraînables :", total_params)
 
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=lr,
-        weight_decay=1e-6
-    )
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
     start_epoch = 1
     loss_history = []
@@ -328,7 +399,7 @@ def main():
     best_loss = float("inf")
 
     # ========================================================
-    # Reprise checkpoint
+    # Reprendre un entraînement si activé
     # ========================================================
 
     if RESUME:
@@ -346,13 +417,12 @@ def main():
 
     print("Start MNIST SWOT-Flow training")
     print("________________________________")
+    print("Hyperparamètres :")
     print("batch_size =", batch_size)
     print("epochs =", epochs)
     print("dim =", dim)
     print("nb_flows =", nb_flows)
     print("hidden_dim =", hidden_dim)
-    print("num_res_blocks =", num_res_blocks)
-    print("scale_clip =", scale_clip)
     print("lr =", lr)
     print("num_projections =", num_projections)
     print("lambda =", lamb)
@@ -374,8 +444,6 @@ def main():
         total_cost = 0.0
         total_reg = 0.0
 
-        model.train()
-
         for images, _ in loader:
             images = images.to(device)
             last_real_images = images
@@ -384,18 +452,11 @@ def main():
 
             target = images.view(current_batch_size, -1)
 
-            source = torch.randn(
-                current_batch_size,
-                dim,
-                device=device
-            )
+            source = torch.randn(current_batch_size, dim).to(device)
 
-            optimizer.zero_grad(set_to_none=True)
+            optimizer.zero_grad()
 
-            generated, shatten_reg, _, cost = model(
-                source,
-                return_cost=True
-            )
+            generated, shatten, _ = model(source)
 
             sw = sliced_wasserstein_distance(
                 generated,
@@ -407,25 +468,30 @@ def main():
                 reduction="mean"
             )
 
+            cost = model.transport_cost(source).mean()
+
+            if torch.is_tensor(shatten):
+                shatten_reg = shatten.mean()
+            else:
+                shatten_reg = shatten
+
             loss = sw + lamb * cost + gamma * shatten_reg
 
-            if torch.isnan(loss) or torch.isinf(loss):
-                print("NaN ou Inf détecté, arrêt de l'entraînement")
+            if torch.isnan(loss):
+                print("NaN détecté, arrêt de l'entraînement")
                 return
 
             loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=5.0
-            )
-
             optimizer.step()
 
             total_loss += loss.item()
             total_sw += sw.item()
             total_cost += cost.item()
-            total_reg += shatten_reg.item()
+
+            if torch.is_tensor(shatten_reg):
+                total_reg += shatten_reg.item()
+            else:
+                total_reg += float(shatten_reg)
 
         avg_loss = total_loss / len(loader)
         avg_sw = total_sw / len(loader)
@@ -455,18 +521,25 @@ def main():
 
         print(
             f"Contributions | "
-            f"lambda*Cost: {cost_contrib:.8f} ({cost_percent:.2f}% de SW) | "
-            f"gamma*Reg: {reg_contrib:.8f} ({reg_percent:.2f}% de SW)"
+            f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW) | "
+            f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW)"
         )
 
-        # Sauvegarde meilleur modèle
+        latest_checkpoint_path = os.path.join(SAVE_DIR, "latest_checkpoint.pth")
+
+        save_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            epoch=epoch,
+            loss_history=loss_history,
+            sw_history=sw_history,
+            path=latest_checkpoint_path
+        )
+
         if avg_loss < best_loss:
             best_loss = avg_loss
 
-            best_checkpoint_path = os.path.join(
-                SAVE_DIR,
-                "best_checkpoint.pth"
-            )
+            best_checkpoint_path = os.path.join(SAVE_DIR, "best_checkpoint.pth")
 
             save_checkpoint(
                 model=model,
@@ -480,28 +553,8 @@ def main():
             print("Nouveau meilleur checkpoint sauvegardé.")
             print("Best loss :", best_loss)
 
-        # Sauvegarde latest moins fréquente
-        if epoch % save_latest_every == 0:
-            latest_checkpoint_path = os.path.join(
-                SAVE_DIR,
-                "latest_checkpoint.pth"
-            )
-
-            save_checkpoint(
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch,
-                loss_history=loss_history,
-                sw_history=sw_history,
-                path=latest_checkpoint_path
-            )
-
-        # Checkpoint périodique
         if epoch % checkpoint_every == 0:
-            checkpoint_path = os.path.join(
-                SAVE_DIR,
-                f"checkpoint_epoch_{epoch}.pth"
-            )
+            checkpoint_path = os.path.join(SAVE_DIR, f"checkpoint_epoch_{epoch}.pth")
 
             save_checkpoint(
                 model=model,
@@ -512,7 +565,6 @@ def main():
                 path=checkpoint_path
             )
 
-        # Affichage
         if epoch % display_every == 0:
             clear_output(wait=True)
 
@@ -526,12 +578,13 @@ def main():
 
             print(
                 f"Contributions | "
-                f"lambda*Cost: {cost_contrib:.8f} ({cost_percent:.2f}% de SW) | "
-                f"gamma*Reg: {reg_contrib:.8f} ({reg_percent:.2f}% de SW)"
+                f"lambda*Cost: {cost_contrib:.6f} ({cost_percent:.2f}% de SW) | "
+                f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW)"
             )
 
             save_generated_images(
                 model=model,
+                device=device,
                 epoch=epoch,
                 fixed_noise=fixed_noise,
                 outdir=OUTDIR,
@@ -541,6 +594,7 @@ def main():
             save_comparison_images(
                 model=model,
                 real_images=last_real_images,
+                device=device,
                 epoch=epoch,
                 fixed_noise=fixed_noise,
                 outdir=OUTDIR,
@@ -556,13 +610,14 @@ def main():
             )
 
     # ========================================================
-    # Sauvegarde finale
+    # Génération finale après entraînement
     # ========================================================
 
     print("Génération finale après entraînement...")
 
     save_generated_images(
         model=model,
+        device=device,
         epoch="final",
         fixed_noise=fixed_noise,
         outdir=OUTDIR,
@@ -572,6 +627,7 @@ def main():
     save_comparison_images(
         model=model,
         real_images=last_real_images,
+        device=device,
         epoch="final",
         fixed_noise=fixed_noise,
         outdir=OUTDIR,
@@ -586,19 +642,13 @@ def main():
         display_result=True
     )
 
-    model_path = os.path.join(
-        SAVE_DIR,
-        f"mnist_swot_flow_flows{nb_flows}_bs{batch_size}_light_realnvp.pth"
-    )
+    model_path = os.path.join(SAVE_DIR, "mnist_swot_flow_flows8_bs256_lr5e4_balanced.pth")
 
     torch.save(model.state_dict(), model_path)
 
     print("Modèle final sauvegardé :", model_path)
 
-    final_checkpoint_path = os.path.join(
-        SAVE_DIR,
-        "final_checkpoint.pth"
-    )
+    final_checkpoint_path = os.path.join(SAVE_DIR, "final_checkpoint.pth")
 
     save_checkpoint(
         model=model,
@@ -611,6 +661,10 @@ def main():
 
     print("Tous les résultats sont sauvegardés dans :", SAVE_DIR)
 
+
+# ============================================================
+# Lancer l'entraînement
+# ============================================================
 
 if __name__ == "__main__":
     main()
