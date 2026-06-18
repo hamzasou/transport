@@ -2,21 +2,13 @@ import torch
 import torch.nn.functional as F
 
 
-def rand_projections(
-    embedding_dim,
-    num_samples,
-    device=None,
-    dtype=torch.float32
-):
+def rand_projections(embedding_dim, num_samples, device=None, dtype=torch.float32):
     """
     Génère des directions aléatoires normalisées sur la sphère unité.
+
+    Chaque projection theta_j vérifie :
+        ||theta_j||_2 = 1
     """
-
-    if embedding_dim <= 0:
-        raise ValueError("embedding_dim doit être strictement positif.")
-
-    if num_samples <= 0:
-        raise ValueError("num_samples doit être strictement positif.")
 
     projections = torch.randn(
         num_samples,
@@ -25,12 +17,7 @@ def rand_projections(
         dtype=dtype
     )
 
-    projections = F.normalize(
-        projections,
-        p=2,
-        dim=1,
-        eps=1e-12
-    )
+    projections = F.normalize(projections, p=2, dim=1)
 
     return projections
 
@@ -38,17 +25,14 @@ def rand_projections(
 def sliced_wasserstein_distance(
     encoded_samples,
     distribution_samples,
-    num_projections=300,
+    num_projections=50,
     p=2,
     device=None,
     root=False,
-    reduction="mean"
+    reduction="none"
 ):
     """
-    Approximation Monte Carlo de la distance Sliced-Wasserstein.
-
-    encoded_samples : tenseur de taille (N, d)
-    distribution_samples : tenseur de taille (N, d)
+    Approximation Monte Carlo de la distance Sliced Wasserstein.
 
     Si root=False :
         retourne SW_p^p
@@ -56,7 +40,7 @@ def sliced_wasserstein_distance(
     Si root=True :
         retourne SW_p
 
-    Pour l'entraînement :
+    Pour l'entraînement, il est recommandé d'utiliser :
         root=False
         reduction="mean"
     """
@@ -79,9 +63,6 @@ def sliced_wasserstein_distance(
     if encoded_samples.size(0) != distribution_samples.size(0):
         raise ValueError("Les deux distributions doivent avoir le même nombre d'échantillons N.")
 
-    if p < 1:
-        raise ValueError("p doit être supérieur ou égal à 1.")
-
     embedding_dim = encoded_samples.size(1)
 
     projections = rand_projections(
@@ -91,32 +72,27 @@ def sliced_wasserstein_distance(
         dtype=encoded_samples.dtype
     )
 
-    # Projections : (N, d) @ (d, J) = (N, J)
     encoded_projections = encoded_samples.matmul(projections.t())
     distribution_projections = distribution_samples.matmul(projections.t())
 
-    # Tri selon les échantillons pour chaque projection
-    encoded_sorted = torch.sort(encoded_projections, dim=0)[0]
-    distribution_sorted = torch.sort(distribution_projections, dim=0)[0]
+    encoded_projections = encoded_projections.t()
+    distribution_projections = distribution_projections.t()
 
-    diff = encoded_sorted - distribution_sorted
+    encoded_projections_sorted = torch.sort(encoded_projections, dim=1)[0]
+    distribution_projections_sorted = torch.sort(distribution_projections, dim=1)[0]
 
-    # W_p^p pour chaque projection
-    wasserstein_p_per_projection = torch.abs(diff).pow(p).mean(dim=0)
+    diff = encoded_projections_sorted - distribution_projections_sorted
+
+    wasserstein_per_projection = torch.abs(diff).pow(p).mean(dim=1)
+
+    if root:
+        wasserstein_per_projection = wasserstein_per_projection.pow(1.0 / p)
 
     if reduction == "none":
-        if root:
-            return wasserstein_p_per_projection.pow(1.0 / p)
-        else:
-            return wasserstein_p_per_projection
+        return wasserstein_per_projection
 
     elif reduction == "mean":
-        sw_p = wasserstein_p_per_projection.mean()
-
-        if root:
-            return sw_p.pow(1.0 / p)
-        else:
-            return sw_p
+        return wasserstein_per_projection.mean()
 
     else:
         raise ValueError("reduction doit être 'none' ou 'mean'.")
