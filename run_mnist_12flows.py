@@ -20,6 +20,7 @@ torch.manual_seed(42)
 
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(42)
+    torch.backends.cudnn.benchmark = True
 
 
 # ============================================================
@@ -77,7 +78,7 @@ else:
 
 
 # ============================================================
-# Fonction pour récupérer le vrai modèle
+# Fonctions utilitaires pour DataParallel
 # ============================================================
 
 def unwrap_model(model):
@@ -89,6 +90,20 @@ def unwrap_model(model):
     if isinstance(model, nn.DataParallel):
         return model.module
     return model
+
+
+def get_core_model(model):
+    """
+    Retourne le vrai modèle SWFlowModel, même si on utilise :
+    - nn.DataParallel
+    - SWFlowModelWithCost
+    """
+    base_model = unwrap_model(model)
+
+    if hasattr(base_model, "swflow"):
+        return base_model.swflow
+
+    return base_model
 
 
 def remove_module_prefix(state_dict):
@@ -193,15 +208,47 @@ class StableRealNVP(nn.Module):
 
 
 # ============================================================
+# Wrapper pour paralléliser aussi transport_cost
+# ============================================================
+
+class SWFlowModelWithCost(nn.Module):
+    """
+    Wrapper autour de SWFlowModel.
+
+    Objectif :
+    faire passer generated, shatten, log_det et transport_cost
+    dans le forward afin que nn.DataParallel répartisse tout le calcul
+    sur les GPU disponibles.
+    """
+
+    def __init__(self, flows, device):
+        super().__init__()
+        self.swflow = SWFlowModel(flows, device)
+
+    def forward(self, source):
+        generated, shatten, log_det = self.swflow(source)
+        cost = self.swflow.transport_cost(source)
+
+        return generated, shatten, log_det, cost
+
+
+# ============================================================
 # Sauvegarde images générées
 # ============================================================
 
-def save_generated_images(model, device, epoch, fixed_noise, outdir=OUTDIR, display_result=True):
+def save_generated_images(
+    model,
+    device,
+    epoch,
+    fixed_noise,
+    outdir=OUTDIR,
+    display_result=True
+):
     model.eval()
     os.makedirs(outdir, exist_ok=True)
 
     with torch.no_grad():
-        generated, _, _ = model(fixed_noise)
+        generated = model(fixed_noise)[0]
 
         generated = generated.view(fixed_noise.size(0), 1, 28, 28)
 
@@ -246,7 +293,7 @@ def save_comparison_images(
     with torch.no_grad():
         real_images = real_images[:n].to(device)
 
-        generated, _, _ = model(fixed_noise)
+        generated = model(fixed_noise)[0]
         generated = generated.view(n, 1, 28, 28)
 
         real_images = (real_images + 1) / 2
@@ -280,7 +327,13 @@ def save_comparison_images(
 # Courbe loss
 # ============================================================
 
-def save_loss_curve(loss_history, sw_history, epoch, outdir=OUTDIR, display_result=True):
+def save_loss_curve(
+    loss_history,
+    sw_history,
+    epoch,
+    outdir=OUTDIR,
+    display_result=True
+):
     os.makedirs(outdir, exist_ok=True)
 
     path = os.path.join(outdir, f"loss_curve_epoch_{epoch}.png")
@@ -293,7 +346,7 @@ def save_loss_curve(loss_history, sw_history, epoch, outdir=OUTDIR, display_resu
     plt.title("Évolution de la loss")
     plt.legend()
     plt.grid(True)
-    plt.savefig(path)
+    plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
 
     if display_result:
@@ -315,11 +368,11 @@ def save_checkpoint(
     sw_history,
     path
 ):
-    base_model = unwrap_model(model)
+    core_model = get_core_model(model)
 
     torch.save({
         "epoch": epoch,
-        "model_state_dict": base_model.state_dict(),
+        "model_state_dict": core_model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "loss_history": loss_history,
         "sw_history": sw_history,
@@ -338,7 +391,9 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
     state_dict = checkpoint["model_state_dict"]
     state_dict = remove_module_prefix(state_dict)
 
-    unwrap_model(model).load_state_dict(state_dict)
+    core_model = get_core_model(model)
+    core_model.load_state_dict(state_dict)
+
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
     start_epoch = checkpoint["epoch"] + 1
@@ -371,8 +426,8 @@ def main():
     nb_flows = 14
     hidden_dim = 512
 
-    lr = 5e-5
-    num_projections = 2000
+    lr = 4e-5
+    num_projections = 2500
 
     lamb = 8.5e-6
     gamma = 3.3e-8
@@ -383,7 +438,7 @@ def main():
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
 
-    fixed_noise = torch.randn(64, dim).to(device)
+    fixed_noise = torch.randn(64, dim, device=device)
 
     # ========================================================
     # Dataset MNIST
@@ -419,7 +474,7 @@ def main():
         for _ in range(nb_flows)
     ]
 
-    model = SWFlowModel(flows, device).to(device)
+    model = SWFlowModelWithCost(flows, device).to(device)
 
     # ========================================================
     # Parallélisme multi-GPU
@@ -494,13 +549,17 @@ def main():
 
             target = images.view(current_batch_size, -1)
 
-            source = torch.randn(current_batch_size, dim).to(device)
+            source = torch.randn(current_batch_size, dim, device=device)
 
             optimizer.zero_grad()
 
+            # ------------------------------------------------
             # Passage avant principal.
-            # Avec DataParallel, ce calcul est réparti sur les GPU.
-            generated, shatten, _ = model(source)
+            # Avec DataParallel, generated, shatten et cost
+            # sont répartis sur les GPU.
+            # ------------------------------------------------
+
+            generated, shatten, _, cost = model(source)
 
             sw = sliced_wasserstein_distance(
                 generated,
@@ -512,9 +571,7 @@ def main():
                 reduction="mean"
             )
 
-            # Méthode personnalisée : on récupère le vrai modèle.
-            base_model = unwrap_model(model)
-            cost = base_model.transport_cost(source).mean()
+            cost = cost.mean()
 
             if torch.is_tensor(shatten):
                 shatten_reg = shatten.mean()
@@ -571,6 +628,10 @@ def main():
             f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW)"
         )
 
+        # ----------------------------------------------------
+        # Checkpoint latest
+        # ----------------------------------------------------
+
         latest_checkpoint_path = os.path.join(SAVE_DIR, "latest_checkpoint.pth")
 
         save_checkpoint(
@@ -581,6 +642,10 @@ def main():
             sw_history=sw_history,
             path=latest_checkpoint_path
         )
+
+        # ----------------------------------------------------
+        # Checkpoint best
+        # ----------------------------------------------------
 
         if avg_loss < best_loss:
             best_loss = avg_loss
@@ -599,6 +664,10 @@ def main():
             print("Nouveau meilleur checkpoint sauvegardé.")
             print("Best loss :", best_loss)
 
+        # ----------------------------------------------------
+        # Checkpoint par epoch
+        # ----------------------------------------------------
+
         if epoch % checkpoint_every == 0:
             checkpoint_path = os.path.join(SAVE_DIR, f"checkpoint_epoch_{epoch}.pth")
 
@@ -610,6 +679,10 @@ def main():
                 sw_history=sw_history,
                 path=checkpoint_path
             )
+
+        # ----------------------------------------------------
+        # Affichage et sauvegarde des figures
+        # ----------------------------------------------------
 
         if epoch % display_every == 0:
             clear_output(wait=True)
@@ -688,14 +761,22 @@ def main():
         display_result=True
     )
 
+    # ========================================================
+    # Sauvegarde finale du modèle seul
+    # ========================================================
+
     model_path = os.path.join(
         SAVE_DIR,
         "mnist_swot_flow_flows14_bs256_lr5e5_balanced.pth"
     )
 
-    torch.save(unwrap_model(model).state_dict(), model_path)
+    torch.save(get_core_model(model).state_dict(), model_path)
 
     print("Modèle final sauvegardé :", model_path)
+
+    # ========================================================
+    # Sauvegarde finale complète
+    # ========================================================
 
     final_checkpoint_path = os.path.join(SAVE_DIR, "final_checkpoint.pth")
 
