@@ -1,3 +1,5 @@
+
+
 import os
 import sys
 import subprocess
@@ -20,7 +22,6 @@ torch.manual_seed(42)
 
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(42)
-    torch.backends.cudnn.benchmark = True
 
 
 # ============================================================
@@ -51,11 +52,10 @@ from src.models import SWFlowModel
 
 
 # ============================================================
-# Chemins Kaggle
+# Chemins Kaggle - test 8 flows, batch size 256
 # ============================================================
-
-SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows14_bs256_lr5e5_lamb85e7_gamma33e9"
-OUTDIR = os.path.join(SAVE_DIR, "mnist_results")
+SAVE_DIR = "/kaggle/working/mnist_swot_flow_flows12_bs256_lr5e4_lamb12e5_gamma5e8"
+OUTDIR = "/kaggle/working/mnist_swot_flow_flows12_bs256_lr5e4_lamb12e5_gamma5e8/mnist_results"
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(OUTDIR, exist_ok=True)
@@ -70,56 +70,9 @@ print("CUDA disponible :", torch.cuda.is_available())
 
 if torch.cuda.is_available():
     print("Nombre de GPU :", torch.cuda.device_count())
-
-    for i in range(torch.cuda.device_count()):
-        print(f"GPU {i} :", torch.cuda.get_device_name(i))
+    print("Nom du GPU :", torch.cuda.get_device_name(0))
 else:
     print("Aucun GPU détecté. Active GPU dans Kaggle.")
-
-
-# ============================================================
-# Fonctions utilitaires pour DataParallel
-# ============================================================
-
-def unwrap_model(model):
-    """
-    Si le modèle est enveloppé par nn.DataParallel,
-    retourne le modèle interne réel.
-    Sinon, retourne le modèle lui-même.
-    """
-    if isinstance(model, nn.DataParallel):
-        return model.module
-    return model
-
-
-def get_core_model(model):
-    """
-    Retourne le vrai modèle SWFlowModel, même si on utilise :
-    - nn.DataParallel
-    - SWFlowModelWithCost
-    """
-    base_model = unwrap_model(model)
-
-    if hasattr(base_model, "swflow"):
-        return base_model.swflow
-
-    return base_model
-
-
-def remove_module_prefix(state_dict):
-    """
-    Corrige les checkpoints sauvegardés avec DataParallel,
-    où les clés commencent parfois par 'module.'.
-    """
-    new_state_dict = {}
-
-    for k, v in state_dict.items():
-        if k.startswith("module."):
-            new_state_dict[k[len("module."):]] = v
-        else:
-            new_state_dict[k] = v
-
-    return new_state_dict
 
 
 # ============================================================
@@ -208,47 +161,15 @@ class StableRealNVP(nn.Module):
 
 
 # ============================================================
-# Wrapper pour paralléliser aussi transport_cost
-# ============================================================
-
-class SWFlowModelWithCost(nn.Module):
-    """
-    Wrapper autour de SWFlowModel.
-
-    Objectif :
-    faire passer generated, shatten, log_det et transport_cost
-    dans le forward afin que nn.DataParallel répartisse tout le calcul
-    sur les GPU disponibles.
-    """
-
-    def __init__(self, flows, device):
-        super().__init__()
-        self.swflow = SWFlowModel(flows, device)
-
-    def forward(self, source):
-        generated, shatten, log_det = self.swflow(source)
-        cost = self.swflow.transport_cost(source)
-
-        return generated, shatten, log_det, cost
-
-
-# ============================================================
 # Sauvegarde images générées
 # ============================================================
 
-def save_generated_images(
-    model,
-    device,
-    epoch,
-    fixed_noise,
-    outdir=OUTDIR,
-    display_result=True
-):
+def save_generated_images(model, device, epoch, fixed_noise, outdir=OUTDIR, display_result=True):
     model.eval()
     os.makedirs(outdir, exist_ok=True)
 
     with torch.no_grad():
-        generated = model(fixed_noise)[0]
+        generated, _, _ = model(fixed_noise)
 
         generated = generated.view(fixed_noise.size(0), 1, 28, 28)
 
@@ -293,7 +214,7 @@ def save_comparison_images(
     with torch.no_grad():
         real_images = real_images[:n].to(device)
 
-        generated = model(fixed_noise)[0]
+        generated, _, _ = model(fixed_noise)
         generated = generated.view(n, 1, 28, 28)
 
         real_images = (real_images + 1) / 2
@@ -327,13 +248,7 @@ def save_comparison_images(
 # Courbe loss
 # ============================================================
 
-def save_loss_curve(
-    loss_history,
-    sw_history,
-    epoch,
-    outdir=OUTDIR,
-    display_result=True
-):
+def save_loss_curve(loss_history, sw_history, epoch, outdir=OUTDIR, display_result=True):
     os.makedirs(outdir, exist_ok=True)
 
     path = os.path.join(outdir, f"loss_curve_epoch_{epoch}.png")
@@ -346,7 +261,7 @@ def save_loss_curve(
     plt.title("Évolution de la loss")
     plt.legend()
     plt.grid(True)
-    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.savefig(path)
     plt.close()
 
     if display_result:
@@ -357,7 +272,7 @@ def save_loss_curve(
 
 
 # ============================================================
-# Sauvegarde checkpoint compatible DataParallel
+# Sauvegarde checkpoint
 # ============================================================
 
 def save_checkpoint(
@@ -368,11 +283,9 @@ def save_checkpoint(
     sw_history,
     path
 ):
-    core_model = get_core_model(model)
-
     torch.save({
         "epoch": epoch,
-        "model_state_dict": core_model.state_dict(),
+        "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "loss_history": loss_history,
         "sw_history": sw_history,
@@ -382,18 +295,13 @@ def save_checkpoint(
 
 
 # ============================================================
-# Chargement checkpoint compatible DataParallel
+# Chargement checkpoint
 # ============================================================
 
 def load_checkpoint(model, optimizer, checkpoint_path, device):
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
-    state_dict = checkpoint["model_state_dict"]
-    state_dict = remove_module_prefix(state_dict)
-
-    core_model = get_core_model(model)
-    core_model.load_state_dict(state_dict)
-
+    model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
     start_epoch = checkpoint["epoch"] + 1
@@ -416,9 +324,16 @@ def main():
     print("Device utilisé :", device)
 
     # ========================================================
-    # Hyperparamètres
+    # Hyperparamètres : test 8 flows
     # ========================================================
 
+ 
+     
+     
+     
+     
+    
+        
     batch_size = 256
     epochs = 400
 
@@ -426,20 +341,20 @@ def main():
     nb_flows = 14
     hidden_dim = 512
 
-    lr = 3e-5
+    lr = 1e-5
     num_projections = 2500
 
     lamb = 8.5e-6
     gamma = 3.3e-8
 
     display_every = 10
-    checkpoint_every = 10
+    checkpoint_every = 20
 
     RESUME = False
     RESUME_CHECKPOINT_PATH = ""
 
-    fixed_noise = torch.randn(64, dim, device=device)
 
+    fixed_noise = torch.randn(64, dim).to(device)
     # ========================================================
     # Dataset MNIST
     # ========================================================
@@ -474,15 +389,7 @@ def main():
         for _ in range(nb_flows)
     ]
 
-    model = SWFlowModelWithCost(flows, device).to(device)
-
-    # ========================================================
-    # Parallélisme multi-GPU
-    # ========================================================
-
-    if torch.cuda.is_available() and torch.cuda.device_count() > 1:
-        print(f"Utilisation de {torch.cuda.device_count()} GPU avec nn.DataParallel")
-        model = nn.DataParallel(model)
+    model = SWFlowModel(flows, device).to(device)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("Nombre de paramètres entraînables :", total_params)
@@ -542,24 +449,18 @@ def main():
         total_reg = 0.0
 
         for images, _ in loader:
-            images = images.to(device, non_blocking=True)
+            images = images.to(device)
             last_real_images = images
 
             current_batch_size = images.size(0)
 
             target = images.view(current_batch_size, -1)
 
-            source = torch.randn(current_batch_size, dim, device=device)
+            source = torch.randn(current_batch_size, dim).to(device)
 
             optimizer.zero_grad()
 
-            # ------------------------------------------------
-            # Passage avant principal.
-            # Avec DataParallel, generated, shatten et cost
-            # sont répartis sur les GPU.
-            # ------------------------------------------------
-
-            generated, shatten, _, cost = model(source)
+            generated, shatten, _ = model(source)
 
             sw = sliced_wasserstein_distance(
                 generated,
@@ -571,7 +472,7 @@ def main():
                 reduction="mean"
             )
 
-            cost = cost.mean()
+            cost = model.transport_cost(source).mean()
 
             if torch.is_tensor(shatten):
                 shatten_reg = shatten.mean()
@@ -628,10 +529,6 @@ def main():
             f"gamma*Reg: {reg_contrib:.6f} ({reg_percent:.2f}% de SW)"
         )
 
-        # ----------------------------------------------------
-        # Checkpoint latest
-        # ----------------------------------------------------
-
         latest_checkpoint_path = os.path.join(SAVE_DIR, "latest_checkpoint.pth")
 
         save_checkpoint(
@@ -642,10 +539,6 @@ def main():
             sw_history=sw_history,
             path=latest_checkpoint_path
         )
-
-        # ----------------------------------------------------
-        # Checkpoint best
-        # ----------------------------------------------------
 
         if avg_loss < best_loss:
             best_loss = avg_loss
@@ -664,10 +557,6 @@ def main():
             print("Nouveau meilleur checkpoint sauvegardé.")
             print("Best loss :", best_loss)
 
-        # ----------------------------------------------------
-        # Checkpoint par epoch
-        # ----------------------------------------------------
-
         if epoch % checkpoint_every == 0:
             checkpoint_path = os.path.join(SAVE_DIR, f"checkpoint_epoch_{epoch}.pth")
 
@@ -679,10 +568,6 @@ def main():
                 sw_history=sw_history,
                 path=checkpoint_path
             )
-
-        # ----------------------------------------------------
-        # Affichage et sauvegarde des figures
-        # ----------------------------------------------------
 
         if epoch % display_every == 0:
             clear_output(wait=True)
@@ -761,22 +646,11 @@ def main():
         display_result=True
     )
 
-    # ========================================================
-    # Sauvegarde finale du modèle seul
-    # ========================================================
+    model_path = os.path.join(SAVE_DIR, "mnist_swot_flow_flows8_bs256_lr5e4_balanced.pth")
 
-    model_path = os.path.join(
-        SAVE_DIR,
-        "mnist_swot_flow_flows14_bs256_lr5e5_balanced.pth"
-    )
-
-    torch.save(get_core_model(model).state_dict(), model_path)
+    torch.save(model.state_dict(), model_path)
 
     print("Modèle final sauvegardé :", model_path)
-
-    # ========================================================
-    # Sauvegarde finale complète
-    # ========================================================
 
     final_checkpoint_path = os.path.join(SAVE_DIR, "final_checkpoint.pth")
 
